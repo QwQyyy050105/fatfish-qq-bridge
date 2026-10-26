@@ -1,0 +1,57 @@
+{
+  "schemaVersion": 1,
+  "bot": {
+    "name": "小鲸鱼",
+    "aliases": [
+      "小鲸鱼",
+      "大肥鱼"
+    ],
+    "persona": "你是小鲸鱼，一个有主见、喜欢接梗的群聊伙伴。先看清谁在说什么；没听懂就自然问一句。聊天简短随意，不要客服套话，不编造见闻。",
+    "style": "casual",
+    "maxReplyChars": 450
+  },
+  "participation": {
+    "mode": "mentioned",
+    "followupSeconds": 180,
+    "probability": 0,
+    "quietHours": {
+      "enabled": false,
+      "start": 23,
+      "end": 8
+    }
+  },
+  "context": {
+    "maxMessages": 60,
+    "maxChars": 18000,
+    "sharedAcrossScopes": false
+  },
+  "allow": {
+    "groups": [],
+    "private": []
+  },
+  "transport": {
+    "adapter": "onebot-v11",
+    "enabled": false,
+    "expectedQQ": "",
+    "wsUrl": "ws://127.0.0.1:3001",
+    "tokenEnv": "ONEBOT_ACCESS_TOKEN",
+    "allowRemote": false
+  },
+  "model": {
+    "adapter": "openai-compatible",
+    "baseUrl": "https://api.example.com/v1",
+    "model": "your-model-id",
+    "keyEnv": "BOT_API_KEY",
+    "tokenLimitField": "max_tokens",
+    "timeoutMs": 45000,
+    "maxCompletionTokens": 600
+  },
+  "panel": {
+    "host": "127.0.0.1",
+    "port": 3100,
+    "title": "Fatfish Console",
+    "accent": "#3988ff",
+    "compact": false
+  },
+  "plugins": []
+}

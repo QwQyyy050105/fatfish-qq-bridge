@@ -1,0 +1,263 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Fatfish template configuration v1",
+  "description": "Editor schema; runtime performs further URL, plugin-path and boundary validation.",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "type": "integer",
+      "default": 1,
+      "const": 1
+    },
+    "bot": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "default": "小鲸鱼",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "aliases": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "小鲸鱼",
+            "大肥鱼"
+          ]
+        },
+        "persona": {
+          "type": "string",
+          "default": "你是小鲸鱼，一个有主见、喜欢接梗的群聊伙伴。先看清谁在说什么；没听懂就自然问一句。聊天简短随意，不要客服套话，不编造见闻。",
+          "minLength": 0,
+          "maxLength": 12000
+        },
+        "style": {
+          "type": "string",
+          "default": "casual",
+          "enum": [
+            "casual",
+            "concise",
+            "detailed"
+          ]
+        },
+        "maxReplyChars": {
+          "type": "integer",
+          "default": 450,
+          "minimum": 20,
+          "maximum": 4000
+        }
+      }
+    },
+    "participation": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "type": "string",
+          "default": "mentioned",
+          "enum": [
+            "mentioned",
+            "active"
+          ]
+        },
+        "followupSeconds": {
+          "type": "integer",
+          "default": 180,
+          "minimum": 0,
+          "maximum": 3600
+        },
+        "probability": {
+          "type": "number",
+          "default": 0,
+          "minimum": 0,
+          "maximum": 1
+        },
+        "quietHours": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "enabled": {
+              "type": "boolean",
+              "default": false
+            },
+            "start": {
+              "type": "integer",
+              "default": 23,
+              "minimum": 0,
+              "maximum": 23
+            },
+            "end": {
+              "type": "integer",
+              "default": 8,
+              "minimum": 0,
+              "maximum": 23
+            }
+          }
+        }
+      }
+    },
+    "context": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "maxMessages": {
+          "type": "integer",
+          "default": 60,
+          "minimum": 2,
+          "maximum": 500
+        },
+        "maxChars": {
+          "type": "integer",
+          "default": 18000,
+          "minimum": 1000,
+          "maximum": 200000
+        },
+        "sharedAcrossScopes": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "allow": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "groups": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\d{5,16}$"
+          },
+          "default": []
+        },
+        "private": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^\\d{5,16}$"
+          },
+          "default": []
+        }
+      }
+    },
+    "transport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "default": "onebot-v11"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": false
+        },
+        "expectedQQ": {
+          "type": "string",
+          "default": "",
+          "pattern": "^(?:|\\d{5,16})$"
+        },
+        "wsUrl": {
+          "type": "string",
+          "default": "ws://127.0.0.1:3001"
+        },
+        "tokenEnv": {
+          "type": "string",
+          "default": "ONEBOT_ACCESS_TOKEN",
+          "pattern": "^[A-Z][A-Z0-9_]{0,79}$"
+        },
+        "allowRemote": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "model": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "adapter": {
+          "type": "string",
+          "default": "openai-compatible"
+        },
+        "baseUrl": {
+          "type": "string",
+          "default": "https://api.example.com/v1"
+        },
+        "model": {
+          "type": "string",
+          "default": "your-model-id"
+        },
+        "keyEnv": {
+          "type": "string",
+          "default": "BOT_API_KEY",
+          "pattern": "^[A-Z][A-Z0-9_]{0,79}$"
+        },
+        "tokenLimitField": {
+          "type": "string",
+          "default": "max_tokens",
+          "enum": [
+            "max_tokens",
+            "max_completion_tokens"
+          ]
+        },
+        "timeoutMs": {
+          "type": "integer",
+          "default": 45000,
+          "minimum": 1000,
+          "maximum": 180000
+        },
+        "maxCompletionTokens": {
+          "type": "integer",
+          "default": 600,
+          "minimum": 16,
+          "maximum": 16000
+        }
+      }
+    },
+    "panel": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "const": "127.0.0.1"
+        },
+        "port": {
+          "type": "integer",
+          "default": 3100,
+          "minimum": 0,
+          "maximum": 65535
+        },
+        "title": {
+          "type": "string",
+          "default": "Fatfish Console",
+          "minLength": 0,
+          "maxLength": 100
+        },
+        "accent": {
+          "type": "string",
+          "default": "#3988ff",
+          "pattern": "^#[a-fA-F0-9]{6}$"
+        },
+        "compact": {
+          "type": "boolean",
+          "default": false
+        }
+      }
+    },
+    "plugins": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "default": []
+    }
+  }
+}
