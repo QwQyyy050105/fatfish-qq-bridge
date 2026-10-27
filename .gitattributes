@@ -1,0 +1,4 @@
+# Generated YAML is compared byte-for-byte with the canonical LF renderer.
+# Keep source and generated configurations portable across Windows checkouts.
+*.yml text eol=lf
+*.yaml text eol=lf
