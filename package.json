@@ -21,12 +21,14 @@
     "build:config": "node scripts/build-config-schema.mjs"
   },
   "dependencies": {
+    "ws": "^8.18.3",
+    "json-bigint": "^1.0.0"
+  },
+  "optionalDependencies": {
     "@deepseek-ai/dsh-host-apiproxy": "0.1.1-rc.2",
     "@deepseek-ai/schemastery": "^3.18.1",
     "@modelcontextprotocol/sdk": "1.32.0",
     "js-yaml": "^4.3.2",
-    "zod": "4.6.6",
-    "ws": "^8.18.3",
-    "json-bigint": "^1.0.0"
+    "zod": "4.6.6"
   }
 }

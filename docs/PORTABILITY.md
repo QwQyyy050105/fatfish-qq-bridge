@@ -2,6 +2,22 @@
 
 核心、平台适配器和可选能力分别验收。离线核心可跨系统运行，不代表真实平台适配器跨系统可用。当前优先 Windows/电脑端，不声明手机常驻或未知桌面版本兼容。
 
+## 选择安装体积
+
+标准安装 `npm ci` 包含全部 npm 可选组件。只需要OneBot 消息桥、兼容 API 和本地面板时，可在停止程序后选择精简安装：
+
+```sh
+npm ci --omit=optional
+npm run demo -- --smoke
+npm run doctor -- --json
+```
+
+这会省略DSH 高级路线、MCP 和配置 schema 工具依赖。精简模式支持 `npm start` 的普通 API 路线，不支持 `npm run start:advanced`、`npm run setup:dsh` 或 `npm run build:config`。使用这些命令前恢复完整依赖，并按 ADVANCED_DSH.md 准备 DSH 宿主和扩展包；npm 依赖安装成功本身不代表 DSH 已连接。
+
+恢复完整组件时，先停止程序，再运行 `npm ci --include=optional`，然后重新启动。两种安装使用同一份锁文件，不改模型、人格卡或会话授权。`npm ci` 会重建依赖目录；请勿在机器人仍运行时切换。可选包安装失败不一定使 npm 整体退出失败，使用对应能力前仍需检查实际安装结果。
+
+完整开发与发布回归使用完整依赖；精简模式的演示、诊断和核心测试只证明相应子集，不能代替全部媒体或高级路线验收。大体积第三方运行环境可以省略安装，扩展接口仍保留。连接恢复、身份核验、取消、重复消息保护和发送回执不因精简模式被关闭。
+
 ## 扩展契约
 
 各仓库 docs/EXTENSIONS.md 和示例插件是可执行契约。插件使用 apiVersion、稳定 id、capabilities 和 setup；setup 参数及返回接口以各仓库实现为准。三个项目没有承诺插件二进制兼容。

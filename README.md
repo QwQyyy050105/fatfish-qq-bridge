@@ -31,6 +31,8 @@ npm test
 npm run doctor -- --json
 ```
 
+只需要 OneBot 消息桥、兼容 API 和本地面板时，可以把安装命令换为 `npm ci --omit=optional`，并先跳过完整 `npm test`。精简模式省略 DSH 高级路线、MCP 和配置 schema 工具依赖；能力差异与恢复方法见 [安装体积选择](docs/PORTABILITY.md#选择安装体积)。完整开发测试使用标准安装。
+
 演示只使用合成账号、mock 模型和 mock 传输，不联网、不操作 QQ。测试包含本机回环 HTTP/WS 协议验收，不连接真实网关或云模型。`doctor` 只检查本地配置；空配置输出 `configuration_required`，不会把未验证的模型标成在线。
 
 ## 连接自己的机器人
