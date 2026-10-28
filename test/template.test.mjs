@@ -53,11 +53,26 @@ test('panel owner auth, CSRF, schema validation and personalization persistence'
     assert.ok((await (await fetch(panel.url)).text()).includes('人格与说话方式'));
   } finally { await panel.close(); fs.rmSync(root, { recursive: true, force: true }); }
 });
-test('OneBot echo correlation, events, error code and timeout work against a real local WS peer', async () => {
+test('OneBot echo correlation, events, error code and timeout work against a real local WS peer', { timeout: 10000 }, async () => {
   const server = new WebSocketServer({ host: '127.0.0.1', port: 0 }); await new Promise(resolve => server.once('listening', resolve));
   let peer; server.on('connection', socket => { peer = socket; socket.on('message', bytes => { const call = JSON.parse(bytes); if (call.action === 'timeout') return; socket.send(JSON.stringify({ echo: call.echo, status: call.action === 'bad' ? 'failed' : 'ok', retcode: call.action === 'bad' ? 1404 : 0, data: { user_id: '100000002' } })); }); });
-  const client = new OneBotClient({ url: `ws://127.0.0.1:${server.address().port}`, reconnect: false, requestTimeoutMs: 50 });
-  try { await client.connect(); assert.equal((await client.getLoginInfo()).user_id, '100000002'); await assert.rejects(client.request('bad'), /retcode_1404/); await assert.rejects(client.request('timeout'), /request_timeout/); const got = new Promise(resolve => client.onGroupMessage(resolve)); peer.send(JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123 })); assert.equal((await got).group_id, 123); const large = new Promise(resolve => client.onGroupMessage(resolve)); peer.send('{"post_type":"message","message_type":"group","message_id":9007199254740993123}'); assert.equal((await large).message_id, '9007199254740993123'); }
+  const client = new OneBotClient({ url: `ws://127.0.0.1:${server.address().port}`, reconnect: false, requestTimeoutMs: 2000 });
+  try {
+    await client.connect();
+    assert.equal((await client.getLoginInfo()).user_id, '100000002');
+    await assert.rejects(client.request('bad'), /retcode_1404/);
+    // Only the deliberately unanswered action needs a short deadline. The WS
+    // handshake and successful replies must tolerate normal CI scheduling.
+    client.requestTimeoutMs = 50;
+    await assert.rejects(client.request('timeout'), /request_timeout/);
+    client.requestTimeoutMs = 2000;
+    const got = new Promise(resolve => client.onGroupMessage(resolve));
+    peer.send(JSON.stringify({ post_type: 'message', message_type: 'group', group_id: 123 }));
+    assert.equal((await got).group_id, 123);
+    const large = new Promise(resolve => client.onGroupMessage(resolve));
+    peer.send('{"post_type":"message","message_type":"group","message_id":9007199254740993123}');
+    assert.equal((await large).message_id, '9007199254740993123');
+  }
   finally { client.close(); for (const socket of server.clients) socket.terminate(); await new Promise(resolve => server.close(resolve)); }
 });
 test('loopback HTTP model and OneBot transport complete a real protocol pipeline without QQ/cloud', async () => {
