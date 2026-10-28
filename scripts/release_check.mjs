@@ -13,6 +13,16 @@ const tokenRules = [
   ['developer_path', /[A-Za-z]:[\\/](?:Users|Projects|SnowLuma|TTS|dy)[\\/][^\s"'<>]*/gi],
   ['credential_url', /https?:\/\/[A-Za-z0-9_.-]+:[^@\s/]{8,}@(?!example[.])[^/\s]+/g],
 ];
+// npm audit does not currently report GHSA-8m2g-8cgm-3vcp for this optional
+// DSH dependency. Admit only versions that have been reviewed as patched;
+// any future upgrade needs a conscious review of the advisory and bridge tests.
+export const approvedDshClientVersions = new Set(['0.1.2-rc.1']);
+export function scanDshClientLock(lock) {
+  return Object.entries(lock.packages ?? {})
+    .filter(([name, entry]) => name.endsWith('node_modules/@deepseek-ai/dsh-client-connection')
+      && !approvedDshClientVersions.has(entry?.version))
+    .map(() => ({file:'package-lock.json',rule:'vulnerable_or_unreviewed_dsh_client_connection'}));
+}
 function location(text, index) { return text.slice(0,index).split('\n').length; }
 export function scanText(relative, text, privateRules = []) {
   const findings = [];
@@ -95,6 +105,7 @@ export async function checkRelease(root, {privateRules=[]} = {}) {
     if (policy.forbiddenPackages.some(p => name.endsWith('node_modules/' + p))) findings.push({file:'package-lock.json',rule:'nonredistributable_dependency'});
     if (/^(?:file:|[A-Za-z]:[\\/])/.test(lock.packages[name]?.resolved ?? '')) findings.push({file:'package-lock.json',rule:'local_dependency'});
   }
+  findings.push(...scanDshClientLock(lock));
   return {ok:findings.length === 0,package:pkg.name,candidateFileCount:files.length,privateRulesChecked:privateRules.length,findings};
 }
 async function main() {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {scanText,scanFilename} from '../scripts/release_check.mjs';
+import {scanText,scanFilename,scanDshClientLock} from '../scripts/release_check.mjs';
 
 test('release scan detects secrets without returning values', () => {
   const secret = 'gh' + 'p_' + 'a'.repeat(40);
@@ -23,4 +23,10 @@ test('release scan permits safe public examples', () => {
 test('release scan catches private key material', () => {
   const header = '-----BEGIN ' + 'PRIVATE KEY-----';
   assert.equal(scanText('accidental.txt',header)[0].rule,'private_key');
+});
+
+test('release policy excludes the vulnerable DSH control-plane client', () => {
+  const pkg = (version) => ({packages:{'node_modules/@deepseek-ai/dsh-client-connection':{version}}});
+  assert.equal(scanDshClientLock(pkg('0.1.1-rc.2'))[0].rule,'vulnerable_or_unreviewed_dsh_client_connection');
+  assert.deepEqual(scanDshClientLock(pkg('0.1.2-rc.1')),[]);
 });

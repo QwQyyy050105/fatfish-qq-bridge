@@ -38,4 +38,6 @@ npm run start:advanced
 
 适配器保留上游 DSH 0.1.x–0.2.x 的已知协议与离线 fixtures，但未对任意新版本做真实联调保证。版本契约由 `src/dsh-client.js`、setup presets 和对应离线测试描述。升级时先跑 `npm test`，再用自己的网关/模型做一次真实收发验收。
 
+仓库的可选 DSH 客户端依赖链将 `@deepseek-ai/dsh-client-connection` 锁定到 `0.1.2-rc.1`，避开 [GHSA-8m2g-8cgm-3vcp](https://github.com/advisories/GHSA-8m2g-8cgm-3vcp) 所述的旧版控制接口漏洞。离线协议回归和依赖安装通过，不代表与任何单独安装的 DSH 宿主已经完成真实联调；此锁定也不会升级那份宿主。请分别核对宿主版本，再验收高级模式的实际收发。
+
 图片、表情、拍一拍、合并转发等动作取决于网关；部分是 OneBot 以外扩展。当前模板不包含音频/图片资产、开发机共享 TTS 或自动 ASR。不要在没有实际媒体输入时要求模型编造内容。新设备适配使用 [扩展接口](EXTENSIONS.md)，不要通过作者的硬盘路径或其他账号配置“自动修复”。
