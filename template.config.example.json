@@ -35,7 +35,8 @@
     "expectedQQ": "",
     "wsUrl": "ws://127.0.0.1:3001",
     "tokenEnv": "ONEBOT_ACCESS_TOKEN",
-    "allowRemote": false
+    "allowRemote": false,
+    "imageCacheRoot": ""
   },
   "model": {
     "adapter": "openai-compatible",
@@ -44,7 +45,8 @@
     "keyEnv": "BOT_API_KEY",
     "tokenLimitField": "max_tokens",
     "timeoutMs": 45000,
-    "maxCompletionTokens": 600
+    "maxCompletionTokens": 600,
+    "visionEnabled": false
   },
   "panel": {
     "host": "127.0.0.1",

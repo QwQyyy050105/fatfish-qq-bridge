@@ -188,6 +188,27 @@ await test('fetchMediaData 标注表情/图片，并保留 summary 与 emojiId',
   } finally { await h.close(); }
 });
 
+await test('ordinary private chat reattaches the referenced picture to a later question', async () => {
+  const h = await bridgeHarness({ config: { ackMessage: '', allow: { private: ['123', '124'], groups: [] } } });
+  try {
+    h.setMode('chat');
+    const picture = { type: 'image', data: { file: 'photo.png' } };
+    const words = text => [{ type: 'text', data: { text } }];
+    const send = (id, messageId, message) => h.handleIncoming('private', id,
+      { user_id: id, self_id: 999, message_id: messageId, message }, h.cfg);
+    await send(123, 10, [picture]);
+    const original = h.calls.prompts.at(-1).content.find(block => block.type === 'image');
+    assert.equal(original?.mediaType, 'image/png');
+    await send(123, 11, words('刚才那张图里有什么？'));
+    const followup = h.calls.prompts.at(-1).content.find(block => block.type === 'image');
+    assert.equal(followup?.data, original.data);
+    await send(123, 12, words('晚安'));
+    assert.ok(h.calls.prompts.at(-1).content.every(block => block.type !== 'image'));
+    await send(124, 13, words('刚才那张图里有什么？'));
+    assert.ok(h.calls.prompts.at(-1).content.every(block => block.type !== 'image'));
+  } finally { await h.close(); }
+});
+
 await test('getImageDimensions / acceptImageBuffer 覆盖 GIF 与 WebP，并拦截非图片', async () => {
   const h = await bridgeHarness();
   try {

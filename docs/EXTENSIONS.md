@@ -53,11 +53,18 @@ export default {
 | 文字聊天 | 实现并离线协议验收 | 保留原链路及离线回归 |
 | 模型 provider 插件 | 实现并实测加载和回复 | 使用 DSH provider 配置 |
 | OneBot v11 传输插件 | 实现 factory 接线 | 自有 OneBot adapter |
-| 图片、表情、合并转发 | 未实现；不把占位符当图像 | 保留工具，依赖模型和可用网关动作 |
+| 群聊与私聊读图 | 可选，已验收本机 get_image → 兼容模型 → QQ 回执 | 保留原媒体工具 |
+| 表情动作、合并转发 | 未实现 | 依赖网关动作 |
 | 自动 ASR | unsupported | unsupported；需要实际音频获取和ASR provider |
 | TTS | unsupported | 共享 TTS unsupported；可选现有语音库发送 |
 | 移动端本地连接 | unsupported | unsupported |
 
-API v1 只接入文本和 OneBot provider，**不会接受** `vision/asr/tts` 等尚未接线的 manifest 能力。后续实现这些功能需增加媒体归属/获取校验、标准消息对象、取消/超时、capability negotiation 和相应端到端测试，再发布新版本；预留计划不等于当前可用。
+## 图片输入
+
+部署端 `model.visionEnabled` 默认关闭。模型 provider 沿用 `model:text` 注册，返回实例的 `capabilities.vision: true` 表示能处理多模态消息。此时 `complete(messages,{signal})` 可能收到用户消息的内容数组，首项为 `{type:"text",text}`，后续为 `{type:"image_url",image_url:{url:"data:image/png;base64,…"}}`。已有纯文本插件继续接收字符串。传输需实现 `getImage(file)`，通过已绑定网关将消息段的简单图片 ID 解析成 `{base64}` 或 `{file}`。后者必须指向配置的 `transport.imageCacheRoot` 下的普通文件。宿主忽略媒体 URL、越界路径、非图片和超限输入。开启但无法取图时，模型仍可回答同轮文字，状态 `lastImageInput` 显示 `unavailable`。支持 PNG/JPEG/GIF/WebP，具体格式还需模型端支持。
+
+官方 OneBot v11 描述了图片段和标准返回文件路径；直接返回 base64 是部分网关的扩展。[OneBot 图片段](https://github.com/botuniverse/onebot-11/blob/master/message/segment.md#图片) · [get_image 规范](https://github.com/botuniverse/onebot-11/blob/master/api/public.md#get_image-获取图片)
+
+ASR/TTS 仍需独立的媒体获取与模型契约。
 
 外部网关若变更协议，应增加新的 adapter 和协议 fixture；不猜客户端内存偏移，不扫描聊天数据库，不把本机安装路径写进公共代码。OneBot 扩展动作应返回明确 unsupported，不能把不支持动作当成账号掉线。DSH 版本变化用 `NodeApiClient` 封装协议，在一次性合成会话中验证订阅、模型回复和清理，不能仅用 `settings.describe` 证明模型能回答。

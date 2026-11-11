@@ -22,7 +22,7 @@ import { mdToPlain, splitForQQ, truncateText, truncateTextTail } from './md-to-p
 import { SENSITIVE_RE } from './sensitive.js';
 import { looksLikeUnfinished } from './v2-wait.js';
 import { compactModelMessage } from './qq-model-view.js';
-import { safeFetchBuffer, looksLikeImageBuffer } from './safe-fetch.js';
+import { safeFetchBuffer, looksLikeImageBuffer, mimeFromBuffer, getImageDimensions, isProbablySafeImageFileRef } from './safe-fetch.js';
 import { AUDIO_EXTS, cleanupTemp, describeAudio, formatBytes, formatDuration, inspectAudio, listAudioFiles, parseTargetKey, processAudioVolume, resolveAudioProcessing, resolveAudioSource, safeJoinLibrary } from './send-voice-lib.js';
 import { discoverSnowLumaConnection, persistSnowLumaEndpoint, persistToken } from './snowluma-conn.js';
 import { createAccountGuard, expectedBotQQ } from './account-guard.js';
@@ -7582,14 +7582,6 @@ async function main() {
   }
 
   // ── 图片/表情字节解析（供一代自动内联与二代按需工具） ────────────────────
-  function mimeFromBuffer(buf) {
-    if (!buf || buf.length < 12) return 'image/jpeg';
-    if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) return 'image/png';
-    if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) return 'image/jpeg';
-    if (buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a') return 'image/gif';
-    if (buf[0] === 0x52 && buf[1] === 0x49 && buf[2] === 0x46 && buf[3] === 0x46 && buf[8] === 0x57 && buf[9] === 0x45 && buf[10] === 0x42 && buf[11] === 0x50) return 'image/webp';
-    return 'image/jpeg';
-  }
 
   function mimeFromUrl(url, fallback = 'image/jpeg') {
     try {
@@ -7600,56 +7592,6 @@ async function main() {
       if (pathname.endsWith('.jpg') || pathname.endsWith('.jpeg')) return 'image/jpeg';
     } catch {}
     return fallback;
-  }
-
-  // 解析常见图片宽高（PNG/JPEG/GIF；WebP 暂不解析返回 null）。
-  // 用于限制“图片炸弹”的解码像素量。
-  function getImageDimensions(buf) {
-    if (!buf || buf.length < 24) return null;
-    try {
-      if (buf[0] === 0x89 && buf[1] === 0x50 && buf[2] === 0x4e && buf[3] === 0x47) {
-        return { width: buf.readUInt32BE(16), height: buf.readUInt32BE(20) };
-      }
-      if (buf.toString('ascii', 0, 6) === 'GIF87a' || buf.toString('ascii', 0, 6) === 'GIF89a') {
-        return { width: buf.readUInt16LE(6), height: buf.readUInt16LE(8) };
-      }
-      if (buf[0] === 0xff && buf[1] === 0xd8 && buf[2] === 0xff) {
-        let offset = 2;
-        while (offset + 9 < buf.length) {
-          if (buf[offset] !== 0xff) { offset += 1; continue; }
-          const marker = buf[offset + 1];
-          if (marker === 0xd8 || marker === 0xd9 || (marker >= 0xd0 && marker <= 0xd7)) { offset += 2; continue; }
-          const len = buf.readUInt16BE(offset + 2);
-          if (len < 2) return null;
-          // SOF0-SOF15（排除 DHT C4、DAC CC、DNL DC、DRI DD）
-          if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-            return { height: buf.readUInt16BE(offset + 5), width: buf.readUInt16BE(offset + 7) };
-          }
-          offset += 2 + len;
-        }
-      }
-      // WebP：解析 VP8X / VP8L / VP8 三种容器，避免“图片炸弹”绕过像素上限。
-      if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') {
-        const fourcc = buf.toString('ascii', 12, 16);
-        if (fourcc === 'VP8X' && buf.length >= 30) {
-          const width = 1 + buf[24] + (buf[25] << 8) + (buf[26] << 16);
-          const height = 1 + buf[27] + (buf[28] << 8) + (buf[29] << 16);
-          return { width, height };
-        }
-        if (fourcc === 'VP8L' && buf.length >= 25) {
-          const bits = [buf[21], buf[22], buf[23], buf[24]];
-          const width = 1 + (((bits[1] & 0x3f) << 8) | bits[0]);
-          const height = 1 + (((bits[3] & 0x0f) << 10) | (bits[2] << 2) | ((bits[1] & 0xc0) >> 6));
-          return { width, height };
-        }
-        if (fourcc === 'VP8 ' && buf.length >= 30) {
-          const width = buf.readUInt16LE(26) & 0x3fff;
-          const height = buf.readUInt16LE(28) & 0x3fff;
-          return { width, height };
-        }
-      }
-    } catch {}
-    return null;
   }
 
   function base64FromMaybe(value) {
@@ -7696,19 +7638,6 @@ async function main() {
     } catch {
       return false;
     }
-  }
-
-  // OneBot 图片 file 字段只应接受简单缓存文件名；拒绝路径、URL、盘符、协议前缀等，
-  // 防止把任意本地路径/内网 URL 交给网关 get_image 造成 SSRF/任意文件读取。
-  function isProbablySafeImageFileRef(file) {
-    const s = String(file ?? '').trim();
-    if (!s || s.length > 512) return false;
-    if (/[\u0000-\u001f\u007f]/.test(s)) return false;
-    if (/[\\/]/.test(s)) return false;
-    if (/^[a-zA-Z]:/.test(s)) return false;
-    if (/^(file|https?|base64|data):/i.test(s)) return false;
-    if (s.includes('..')) return false;
-    return /^[\w.+=@-]+$/.test(s);
   }
 
   // QQ 表情包 CDN 的地址可以只靠 emoji_id 推出来（实测形态：
@@ -7982,7 +7911,7 @@ async function main() {
       } catch {}
     }
     // 一代/普通模式：messageMediaStore
-    const byRef = messageMediaStore.get(key);
+    const byRef = messageMediaStore.get(key)?.byRef;
     if (byRef) {
       const hit = byRef.get(refStr);
       if (Array.isArray(hit)) return hit;
@@ -10788,12 +10717,14 @@ async function main() {
     const seqRef = event.message_seq != null ? String(event.message_seq) : '';
     const refsToStore = [...new Set([messageRef, seqRef].filter(Boolean))];
     if (refsToStore.length > 0 && mediaList.length > 0) {
-      let mediaByRef = messageMediaStore.get(key);
-      if (!mediaByRef) {
-        mediaByRef = new Map();
-        messageMediaStore.set(key, mediaByRef);
+      let cached = messageMediaStore.get(key);
+      if (!cached) {
+        cached = { byRef: new Map(), latestPrivateImage: null };
+        messageMediaStore.set(key, cached);
       }
+      const mediaByRef = cached.byRef;
       for (const ref of refsToStore) mediaByRef.set(ref, mediaList);
+      if (kind === 'private') cached.latestPrivateImage = { ref: refsToStore[0], expires: Date.now() + 120000 };
       // 防止无限增长：超过上限时删除最旧一条（Map 保持插入序）
       while (mediaByRef.size > MAX_MEDIA_STORE_PER_KEY) {
         const oldestKey = mediaByRef.keys().next().value;
@@ -11045,6 +10976,18 @@ async function main() {
       return;
     }
 
+    // In ordinary private chat the follow-up often arrives as a separate text event.
+    // Reuse only the image explicitly referred to in this same conversation.
+    let modelMedia = mediaList;
+    if (!mediaList.length && kind === 'private' && /(?:刚才|刚发|上[一张幅]*|前[一张面]*|这[张幅]|那[张幅])[^，。？！\n]{0,10}(?:图片|照片|截图|图像|图)/.test(plainContent)) {
+      const cached = messageMediaStore.get(key);
+      const quoted = Array.isArray(event.message) && event.message.find(segment => segment.type === 'reply');
+      if (quoted) modelMedia = cached?.byRef.get(String(quoted.data?.id)) ?? [];
+      else if (cached?.latestPrivateImage?.expires > Date.now()) {
+        modelMedia = cached.byRef.get(cached.latestPrivateImage.ref) ?? [];
+      }
+    }
+
     // DSH 重启容错：DSH 不可用时消息入队（不丢），恢复后自动补投
     if (!dshReady) {
       const items = queued.get(key) ?? [];
@@ -11052,7 +10995,7 @@ async function main() {
         items.shift();
         log(`队列满（${QUEUE_MAX}），丢弃最旧消息 (${key})`);
       }
-      items.push({ promptText, media: mediaList });
+      items.push({ promptText, media: modelMedia });
       queued.set(key, items);
       const now = Date.now();
       if ((queuedHintAt.get(key) ?? 0) + QUEUE_HINT_COOLDOWN_MS < now) {
@@ -11068,14 +11011,14 @@ async function main() {
       sessionId = await ensureSession(key);
     } catch (error) {
       if (String(error?.message ?? error).includes('会话创建期间已重置')) {
-        enqueueForRetry(key, promptText, { media: mediaList });
+        enqueueForRetry(key, promptText, { media: modelMedia });
         return;
       }
       throw error;
     }
     let content = [{ type: 'text', text: withSlangContext(promptText) }];
-    if (Array.isArray(mediaList) && mediaList.length > 0) {
-      const imageParts = await resolveMediaList(mediaList);
+    if (modelMedia.length > 0) {
+      const imageParts = await resolveMediaList(modelMedia);
       content = [{ type: 'text', text: withSlangContext(promptText) }, ...imageParts];
     }
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');

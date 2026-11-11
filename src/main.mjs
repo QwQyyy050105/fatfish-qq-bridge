@@ -15,7 +15,7 @@ else if (command === 'init') {
 } else if (command === 'doctor') {
   try {
     const config = readConfig(ROOT), issues = configurationIssues(config);
-    const report = { schemaVersion: 1, status: issues.length ? 'configuration_required' : 'configured_not_connected', node: process.version, platform: process.platform, transport: { adapter: config.transport.adapter, enabled: config.transport.enabled, verified: false }, model: { adapter: config.model.adapter, verified: false }, issues, checksPerformed: ['local_configuration_only'], capabilities: { windows: 'supported_with_external_onebot_gateway', otherDesktop: 'protocol_portable_gateway_validation_required', mobile: 'unsupported', vision: 'unsupported_in_direct_api_mode', asr: 'unsupported', tts: 'unsupported' } };
+    const report = { schemaVersion: 1, status: issues.length ? 'configuration_required' : 'configured_not_connected', node: process.version, platform: process.platform, transport: { adapter: config.transport.adapter, enabled: config.transport.enabled, verified: false }, model: { adapter: config.model.adapter, verified: false }, issues, checksPerformed: ['local_configuration_only'], capabilities: { windows: 'supported_with_external_onebot_gateway', otherDesktop: 'protocol_portable_gateway_validation_required', mobile: 'unsupported', vision: config.model.visionEnabled ? 'enabled_unverified' : 'disabled', asr: 'unsupported', tts: 'unsupported' } };
     console.log(JSON.stringify(report, null, 2));
   } catch { console.log(JSON.stringify({ status: 'invalid_configuration', issues: ['config_parse_or_validation_failed'], checksPerformed: ['local_configuration_only'] }, null, 2)); process.exitCode = 1; }
 } else if (command === 'start' || command === 'panel') {

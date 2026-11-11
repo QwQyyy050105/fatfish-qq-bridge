@@ -1,14 +1,15 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { randomBytes, randomUUID } from 'node:crypto';
+import { localImageRoot } from './images.mjs';
 export const DEFAULT_CONFIG = {
   schemaVersion: 1,
   bot: { name: '小鲸鱼', aliases: ['小鲸鱼', '大肥鱼'], persona: '你是小鲸鱼，一个有主见、喜欢接梗的群聊伙伴。先看清谁在说什么；没听懂就自然问一句。聊天简短随意，不要客服套话，不编造见闻。', style: 'casual', maxReplyChars: 450 },
   participation: { mode: 'mentioned', followupSeconds: 180, probability: 0, quietHours: { enabled: false, start: 23, end: 8 } },
   context: { maxMessages: 60, maxChars: 18000, sharedAcrossScopes: false },
   allow: { groups: [], private: [] },
-  transport: { adapter: 'onebot-v11', enabled: false, expectedQQ: '', wsUrl: 'ws://127.0.0.1:3001', tokenEnv: 'ONEBOT_ACCESS_TOKEN', allowRemote: false },
-  model: { adapter: 'openai-compatible', baseUrl: 'https://api.example.com/v1', model: 'your-model-id', keyEnv: 'BOT_API_KEY', tokenLimitField: 'max_tokens', timeoutMs: 45000, maxCompletionTokens: 600 },
+  transport: { adapter: 'onebot-v11', enabled: false, expectedQQ: '', wsUrl: 'ws://127.0.0.1:3001', tokenEnv: 'ONEBOT_ACCESS_TOKEN', allowRemote: false, imageCacheRoot: '' },
+  model: { adapter: 'openai-compatible', baseUrl: 'https://api.example.com/v1', model: 'your-model-id', keyEnv: 'BOT_API_KEY', tokenLimitField: 'max_tokens', timeoutMs: 45000, maxCompletionTokens: 600, visionEnabled: false },
   panel: { host: '127.0.0.1', port: 3100, title: 'Fatfish Console', accent: '#3988ff', compact: false },
   plugins: []
 };
@@ -35,6 +36,8 @@ export function validateConfig(input = {}) {
   if (c.transport.allowRemote) requireValue(ws.protocol === 'wss:', 'remote gateway requires wss');
   const api = new URL(c.model.baseUrl); requireValue((api.protocol === 'https:' || (api.protocol === 'http:' && ['127.0.0.1', 'localhost', '[::1]'].includes(api.hostname))) && !api.username && !api.password && !api.search && !api.hash, 'model.baseUrl');
   requireValue(['max_tokens', 'max_completion_tokens'].includes(c.model.tokenLimitField), 'model.tokenLimitField');
+  requireValue(typeof c.model.visionEnabled === 'boolean', 'model.visionEnabled');
+  requireValue(localImageRoot(c.transport.imageCacheRoot), 'transport.imageCacheRoot');
   requireValue(typeof c.model.model === 'string' && c.model.model.trim() && c.model.model.length <= 200, 'model.model'); requireValue(bounded(c.model.timeoutMs, 1000, 180000) && bounded(c.model.maxCompletionTokens, 16, 16000), 'model limits');
   requireValue(typeof c.transport.adapter === 'string' && typeof c.model.adapter === 'string', 'adapters');
   requireValue(c.panel.host === '127.0.0.1' && bounded(c.panel.port, 0, 65535) && typeof c.panel.title === 'string' && c.panel.title.length <= 100 && /^#[a-f\d]{6}$/i.test(c.panel.accent) && typeof c.panel.compact === 'boolean', 'panel');

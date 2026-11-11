@@ -13,7 +13,7 @@ async function boundedJson(response, limit = 2 * 1024 * 1024) {
 }
 export class CompatibleApiModel {
   capabilities = { text: true, tools: false, vision: false, asr: false, tts: false, streaming: false };
-  constructor(config, { env = process.env, fetchImpl = fetch } = {}) { this.config = config; this.env = env; this.fetch = fetchImpl; }
+  constructor(config, { env = process.env, fetchImpl = fetch } = {}) { this.config = config; this.env = env; this.fetch = fetchImpl; this.capabilities.vision = config.visionEnabled === true; }
   async complete(messages, { signal } = {}) {
     const c = this.config, key = this.env[c.keyEnv]; if (!key && new URL(c.baseUrl).protocol === 'https:') throw new ModelError('model_key_environment_missing');
     const timeout = AbortSignal.timeout(c.timeoutMs);

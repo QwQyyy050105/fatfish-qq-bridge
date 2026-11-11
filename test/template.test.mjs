@@ -123,9 +123,14 @@ test('configuration-only CLI starts an owner panel but never contacts an enabled
       assert.deepEqual(readConfig(root), initial);
     }
     const updated = structuredClone(initial); updated.bot.name = 'CLI Hot Update';
+    updated.model.visionEnabled = true;
+    updated.transport.imageCacheRoot = root;
     assert.equal((await fetch(`${panel.url}/api/config`, { method: 'PUT', headers, body: JSON.stringify(updated) })).status, 200);
     assert.deepEqual(await fetch(`${panel.url}/api/config`, { headers }).then(r => r.json()), updated); assert.deepEqual(readConfig(root), updated);
-    assert.equal((await fetch(`${panel.url}/api/status`, { headers }).then(r => r.json())).transport, 'disabled_configuration_mode'); assert.equal(contacts, 0);
+    const state = await fetch(`${panel.url}/api/status`, { headers }).then(r => r.json());
+    assert.equal(state.transport, 'disabled_configuration_mode'); assert.equal(contacts, 0);
+    assert.equal(state.capabilities.vision, true);
+    assert.equal(state.lastImageInput, 'unverified');
   } finally { child.kill(); await exited; for (const peer of gateway.clients) peer.terminate(); await new Promise(resolve => gateway.close(resolve)); fs.rmSync(root, { recursive: true, force: true }); }
 });
 

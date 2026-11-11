@@ -1,9 +1,14 @@
 import { CompatibleApiModel, FailureBackoff } from './model.mjs';
 import { OneBotClient, text } from '../onebot-client.mjs';
+import { imageRefs, readGatewayImage, replyRef } from './images.mjs';
 const mediaLabel = type => ['image', 'record', 'video', 'file'].includes(type) ? `[收到${type}；当前文本模式不支持识别]` : '';
-const content = event => typeof event.message === 'string'
-  ? event.message.replace(/\[CQ:([^,\]]+)[^\]]*\]/g, (_, type) => mediaLabel(type)).replaceAll('&#91;', '[').replaceAll('&#93;', ']').replaceAll('&#44;', ',').replaceAll('&amp;', '&')
-  : (event.message ?? []).map(s => s.type === 'text' ? s.data?.text ?? '' : mediaLabel(s.type)).join('');
+function content(event, vision) {
+  const label = type => type === 'image' && vision ? '[图片]' : mediaLabel(type);
+  return typeof event.message === 'string'
+    ? event.message.replace(/\[CQ:([^,\]]+)[^\]]*\]/g, (_, type) => label(type)).replaceAll('&#91;', '[').replaceAll('&#93;', ']').replaceAll('&#44;', ',').replaceAll('&amp;', '&')
+    : (event.message ?? []).map(s => s.type === 'text' ? s.data?.text ?? '' : label(s.type)).join('');
+}
+const recentImageQuestion = /(?:刚才|刚发|上[一张幅]*|前[一张面]*|这[张幅]|那[张幅])[^，。？！\n]{0,10}(?:图片|照片|截图|图像|图)/;
 export class ChatRuntime {
   constructor(config, { model, transport, registry, env = process.env, now = Date.now, random = Math.random, log = () => {} } = {}) {
     this.config = config; this.env = env; this.now = now; this.random = random; this.log = log;
@@ -13,6 +18,8 @@ export class ChatRuntime {
     this.model = model ?? (modelFactory ? modelFactory(config.model, { env }) : new CompatibleApiModel(config.model, { env }));
     this.transport = transport ?? (transportFactory ? transportFactory(config.transport, { env }) : new OneBotClient({ url: config.transport.wsUrl, accessToken: env[config.transport.tokenEnv], reconnect: true }));
     this.health = { transport: 'disconnected', identity: 'unverified', controlApi: 'not_applicable', model: 'unverified', sent: 0, received: 0, lastLatencyMs: null, lastError: null };
+    this.recentImages = new Map();
+    this.lastImageInput = 'unverified';
     this.backoff = new FailureBackoff({ now }); this.histories = new Map(); this.followups = new Map(); this.queues = new Map(); this.seen = new Set(); this.closed = false; this.controllers = new Set(); this.generation = 0;
     this.transport.on('open', () => { this.health.transport = 'connected'; this.verifyIdentity().catch(() => {}); });
     this.transport.on('close', () => { this.health.transport = 'disconnected'; this.health.identity = 'unverified'; });
@@ -41,12 +48,27 @@ export class ChatRuntime {
     if (event.message_id === undefined) return { ignored: 'missing_message_id' };
     const dedup = `${key}:${event.message_id}`; if (this.seen.has(dedup)) return { ignored: 'duplicate' };
     this.seen.add(dedup); if (this.seen.size > 5000) this.seen.delete(this.seen.values().next().value);
-    const message = content(event).trim(); if (!message) return { ignored: 'unsupported_media' };
+    const vision = this.canReadImages();
+    const message = content(event, vision).trim(); if (!message) return { ignored: 'unsupported_media' };
     this.health.received++; const c = this.config;
     const historyKey = c.context.sharedAcrossScopes ? 'shared' : key, history = this.histories.get(historyKey) ?? [];
     const speaker = String(event.sender?.card || event.sender?.nickname || event.user_id).slice(0, 100);
-    history.push({ role: 'user', content: `[${key}] ${speaker} (id=${event.user_id}): ${message.slice(0, c.context.maxChars)}` });
+    const entry = { role: 'user', content: `[${key}] ${speaker} (id=${event.user_id}): ${message.slice(0, c.context.maxChars)}` };
+    history.push(entry);
     this.trim(history); this.histories.set(historyKey, history);
+    const hasImage = Array.isArray(event.message)
+      ? event.message.some(segment => segment?.type === 'image')
+      : /\[CQ:image[,\]]/.test(event.message);
+    let files = [];
+    if (vision && hasImage) {
+      files = imageRefs(event.message);
+      this.recentImages.set(key, { files, messageId: String(event.message_id), expires: this.now() + 120000 });
+    } else if (vision) {
+      const previous = this.recentImages.get(key);
+      const quoted = replyRef(event.message);
+      if (previous && previous.expires > this.now() &&
+          (quoted === null ? recentImageQuestion.test(message) : quoted === previous.messageId)) files = previous.files;
+    }
     const q = c.participation.quietHours, hour = new Date(this.now()).getHours();
     const quiet = q.enabled && (q.start === q.end || (q.start < q.end ? hour >= q.start && hour < q.end : hour >= q.start || hour < q.end));
     const cqMention = typeof event.message === 'string' && event.message.includes(`[CQ:at,qq=${c.transport.expectedQQ}]`);
@@ -61,7 +83,29 @@ export class ChatRuntime {
       if (!this.backoff.ready()) return { ignored: 'model_backoff' };
       const started = this.now(), controller = new AbortController(); this.controllers.add(controller); let reply;
       try {
-        const messages = [{ role: 'system', content: `${c.bot.persona}\n你的名字：${c.bot.name}。风格：${c.bot.style}。每次最多${c.bot.maxReplyChars}字。带有名字和id的是实际发言人，转述与引用不改变发言人。当前仅有文字输入，媒体占位符不是内容，不能据此描述图片或语音。只输出本轮聊天回复，不输出分析过程。` }, ...structuredClone(history)];
+        const system = `${c.bot.persona}\n你的名字：${c.bot.name}。风格：${c.bot.style}。每次最多${c.bot.maxReplyChars}字。名字和id标记实际发言人。只根据本轮实际附上的图片看图；占位符或转述不能证明图像或语音内容。只输出聊天回复。`;
+        const position = history.indexOf(entry);
+        const turnHistory = files.length ? (position < 0 ? [entry] : history.slice(0, position + 1)) : history;
+        const messages = [{ role: 'system', content: system }, ...structuredClone(turnHistory)];
+        if (files.length) {
+          const current = () => !controller.signal.aborted && generation === this.generation && !!this.authorized(event);
+          try { await this.verifyIdentity(); } catch { return { error: 'gateway_identity_unverified' }; }
+          const images = [];
+          for (const file of files) {
+            if (!current()) return { ignored: 'configuration_changed' };
+            try {
+              const part = await readGatewayImage(this.transport, file, c.transport.imageCacheRoot);
+              if (part) images.push(part);
+            } catch { /* Missing/unsupported gateway media still permits a text answer. */ }
+          }
+          if (!current()) return { ignored: 'configuration_changed' };
+          if (images.length) {
+            try { await this.verifyIdentity(); } catch { return { error: 'gateway_identity_unverified' }; }
+            if (!current()) return { ignored: 'configuration_changed' };
+            messages.at(-1).content = [{ type: 'text', text: entry.content }, ...images];
+          }
+          this.lastImageInput = images.length ? 'attached' : 'unavailable';
+        } else if (hasImage && vision) this.lastImageInput = 'unavailable';
         reply = await this.model.complete(messages, { signal: controller.signal });
         if (this.closed || generation !== this.generation || !this.authorized(event)) return { ignored: 'configuration_changed' };
         if (typeof reply?.text !== 'string' || !reply.text.trim()) throw Object.assign(new Error('model_empty_response'), { code: 'model_empty_response' });
@@ -85,7 +129,8 @@ export class ChatRuntime {
     this.queues.set(key, work); work.finally(() => { if (this.queues.get(key) === work) this.queues.delete(key); }); return work;
   }
   trim(history) { const c = this.config.context; while (history.length > c.maxMessages || (history.length > 1 && history.reduce((n, m) => n + m.content.length, 0) > c.maxChars)) history.shift(); }
-  status() { return { ...this.health, modelHealth: this.backoff.snapshot(), capabilities: this.model.capabilities ?? { text: true }, activeConversations: this.queues.size, historyPersistence: 'memory_only' }; }
-  reconfigure(config) { this.generation++; this.config = config; for (const controller of this.controllers) controller.abort(); this.histories.clear(); this.followups.clear(); this.seen.clear(); }
+  canReadImages() { return this.config.model.visionEnabled && this.model.capabilities?.vision === true && typeof this.transport.getImage === 'function'; }
+  status() { return { ...this.health, modelHealth: this.backoff.snapshot(), capabilities: { ...this.model.capabilities, text: true, vision: this.canReadImages() }, lastImageInput: this.lastImageInput, activeConversations: this.queues.size, historyPersistence: 'memory_only' }; }
+  reconfigure(config) { this.generation++; this.config = config; for (const controller of this.controllers) controller.abort(); this.histories.clear(); this.followups.clear(); this.seen.clear(); this.recentImages.clear(); }
   async close() { this.closed = true; this.generation++; for (const controller of this.controllers) controller.abort(); this.transport.close(); await Promise.allSettled([...this.queues.values()]); }
 }
