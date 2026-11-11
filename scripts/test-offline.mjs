@@ -16,7 +16,7 @@ const runs = [
 if (!coreOnly) runs.push(...[
   'test-account-identity.mjs', 'test-state-persistence.mjs', 'test-agent-preset-patches.mjs', 'test-audit-setup.mjs', 'test-audit-setup-guards.mjs',
   'test-audit-bridge.mjs','test-audit-protocol.mjs','test-audit-protocol-helpers.mjs','test-audit-security.mjs','test-audit-security-mcp.mjs','test-audit-regressions.mjs',
-  'test-dsh-inbox-projection.mjs','test-md-to-plain.mjs','test-slang-learn.mjs','test-mux-reconnect.mjs','test-token-economy.mjs','test-qq-model-view.mjs','test-qq-preset-contract.mjs',
+  'test-console-browser-auth.mjs','test-dsh-inbox-projection.mjs','test-md-to-plain.mjs','test-slang-learn.mjs','test-mux-reconnect.mjs','test-token-economy.mjs','test-qq-model-view.mjs','test-qq-preset-contract.mjs',
   'test-reply-wait.mjs','test-preset-prompt.mjs','test-role-card.mjs','test-media-search.mjs','test-issue-regressions.mjs','test-v2-initial-prompt.mjs','test-token-usage.mjs','test-hardening.mjs',
   'test-forward.mjs','test-stickers.mjs','test-qq-mode-plugin.mjs','test-v2-wait.mjs'
 ].map(name => [path.join('scripts', name)]));

@@ -3182,6 +3182,11 @@ async function main() {
     const configuredToken = String(cfg.consoleToken ?? '').trim();
     const tokenValid = configuredToken.length >= 16 && configuredToken.length <= 128 && /^[A-Za-z0-9_-]+$/.test(configuredToken);
     let consoleToken = tokenValid ? configuredToken : loadOrCreateConsoleToken();
+    const browserLaunches = new Map();
+    let browserSessionKey = crypto.randomBytes(32);
+    function browserCredential(host) {
+      return 'fb1_' + crypto.createHmac('sha256',browserSessionKey).update(consoleToken + '\0http://' + host).digest('base64url');
+    }
     // 令牌必须非空才继续。下面鉴权处原来的写法是「令牌为空 ⇒ return true（放行）」，
     // 注释写着"启动时已自动生成并持久化"—— 等于承认那一行不可达，可它是一条**失败开放**的分支：
     // 一旦真的空了（写盘异常被吞、以后新增"关闭鉴权"之类的配置），控制台上那些
@@ -3189,7 +3194,7 @@ async function main() {
     // 挡不住本机进程。这里改成失败关闭：宁可启动时报错，也不要静默开着一个无鉴权的管理 API。
     if (!consoleToken) throw new Error('控制台令牌为空：拒绝以无鉴权方式启动控制台 API');
     if (!tokenValid && configuredToken) log(`控制台 config.consoleToken 长度/字符不合法，已忽略并回退到自动生成令牌`);
-    if (!configuredToken) log(`控制台未配置 consoleToken，已自动生成：${String(consoleToken).slice(0, 6)}…（完整值保存在 state/console-token）`);
+    if (!configuredToken) log('控制台正在使用 state/console-token 中的本机凭据');
     // 二代会话级隔离：MCP 工具调用时若带 x-agent-token，则必须匹配该会话的 agentToken。
     // 控制台/管理端请求不带此头，仍走 consoleToken 管理通道。
     //
@@ -3322,17 +3327,51 @@ async function main() {
       // 定长比较：`!==` 会在第一个不同的字符处短路，理论上可被本机进程用响应时延逐字节试探。
       // 令牌是 192 bit 随机值且只监听回环，所以这是纵深防御而非在野漏洞。
       const suppliedToken = String(url.searchParams.get('token') ?? req.headers['x-console-token'] ?? '');
-      const tokenMatches = (() => {
+      const masterMatches = (() => {
         if (!consoleToken) return false; // 上面已拒绝空令牌；真出现也只许失败关闭，绝不 return true
         const a = Buffer.from(suppliedToken, 'utf8');
         const b = Buffer.from(consoleToken, 'utf8');
         if (a.length !== b.length) return false;
         return crypto.timingSafeEqual(a, b);
       })();
-      if (consoleToken && !tokenMatches) {
+      const localOrigin = 'http://' + hostHeader.toLowerCase();
+      const agentRequest = req.headers['x-agent-call'] !== undefined || req.headers['x-agent-token'] !== undefined;
+      if (['/api/console/launch-ticket','/api/console/redeem-ticket'].includes(url.pathname)) {
+        // The desktop launcher knows the master. The browser receives a credential
+        // bound to this loopback origin; neither credential appears in the URL.
+        if (agentRequest || req.method !== 'POST' || url.search ||
+            !/^application\/json(?:\s*;|$)/i.test(req.headers['content-type'] || '') ||
+            (req.headers.origin !== undefined && req.headers.origin !== localOrigin)) {
+          return sendJson({ok:false,error:'本机控制台请求无效'},403);
+        }
+        const at = Date.now();
+        for (const [ticket, entry] of browserLaunches) if (entry.expires <= at) browserLaunches.delete(ticket);
+        const credential = browserCredential(hostHeader.toLowerCase());
+        if (url.pathname === '/api/console/launch-ticket') {
+          if (!masterMatches || !req.headers['x-console-token']) return sendJson({ok:false},401);
+          if (browserLaunches.size >= 8) browserLaunches.delete(browserLaunches.keys().next().value);
+          const ticket = crypto.randomBytes(32).toString('base64url');
+          browserLaunches.set(ticket,{credential,expires:at + 60_000});
+          return sendJson({ok:true,ticket});
+        }
+        const ticket = req.headers['x-console-launch'];
+        const entry = browserLaunches.get(ticket);
+        if (req.headers.origin !== localOrigin || !entry || entry.credential !== credential) return sendJson({ok:false},401);
+        browserLaunches.delete(ticket);
+        return sendJson({ok:true,credential});
+      }
+      const header = req.headers['x-console-token'];
+      const browserMatches = !agentRequest && typeof header === 'string' && /^fb1_[A-Za-z0-9_-]{43}$/.test(header) &&
+        crypto.timingSafeEqual(Buffer.from(header),Buffer.from(browserCredential(hostHeader.toLowerCase())));
+      if (browserMatches && !masterMatches && url.pathname === '/api/console/token') {
+        return sendJson({ok:false,error:'更换主令牌需要用当前主令牌登录'},403);
+      }
+      const legacyLink = req.method === 'GET' && url.pathname === '/' && url.searchParams.has('token');
+      if (legacyLink || (consoleToken && !masterMatches && !browserMatches)) {
         if (req.method === 'GET' && url.pathname === '/') {
-          res.writeHead(401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
-          res.end('<!doctype html><meta charset="utf-8"><title>需要令牌</title><script>const t=prompt(\'请输入控制台访问令牌\');if(t)location.href=\'/?token=\'+encodeURIComponent(t);</script>');
+          res.writeHead(legacyLink && masterMatches ? 200 : 401, { 'content-type': 'text/html; charset=utf-8', ...SECURITY_HEADERS });
+          try { res.end(fs.readFileSync(path.join(ROOT,'public','console-login.html'),'utf8')); }
+          catch { res.end('控制台登录页缺失，请检查安装'); }
         } else {
           sendJson({ ok: false, error: '未授权：请提供控制台访问令牌' }, 401);
         }
@@ -4279,8 +4318,10 @@ async function main() {
           cfg.consoleToken = generated ? '' : newToken;
           atomicWriteText(path.join(STATE_DIR, 'console-token'), newToken);
           consoleToken = newToken;
+          browserLaunches.clear();
+          browserSessionKey = crypto.randomBytes(32);
           log(`控制台：访问令牌已${generated ? '重新生成' : '手动修改'}（不记录完整值）`);
-          sendJson({ ok: true, token: newToken, generated });
+          sendJson({ ok: true, token: newToken, generated, browserCredential: browserCredential(hostHeader.toLowerCase()) });
           return;
         }
         // ── 测试发送消息（强制走白名单校验） ───────────────────────────────────

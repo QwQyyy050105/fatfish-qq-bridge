@@ -2639,33 +2639,16 @@ button:active:not(:disabled) {
   <noscript><div class="connection-alert">控制台需要启用 JavaScript 才能加载状态及保存设置。</div></noscript>
 
 <script>
-(function () {
-  // 如果通过 ?token= 进入（控制台启用鉴权时根路径会重定向带 token），存到 localStorage
-  const qs = new URLSearchParams(location.search);
-  const token = qs.get('token');
-  if (token) {
-    localStorage.setItem('consoleToken', token);
-    history.replaceState({}, '', location.pathname + location.hash);
-  }
-})();
 
-async function api(path, method, body, _retried = 0) {
+async function api(path, method, body) {
   const headers = body ? {'content-type':'application/json'} : {};
   const token = localStorage.getItem('consoleToken');
   if (token) headers['x-console-token'] = token;
   const res = await fetch(path, { method: method || 'GET', headers, body: body ? JSON.stringify(body) : undefined });
   if (res.status === 401) {
-    if (_retried >= 2) {
-      localStorage.removeItem('consoleToken');
-      throw new Error('未授权');
-    }
-    const t = prompt('请输入控制台访问令牌：');
-    if (t) {
-      localStorage.setItem('consoleToken', t.trim());
-      return api(path, method, body, _retried + 1);
-    }
-    localStorage.removeItem('consoleToken');
-    throw new Error('未授权');
+    if (localStorage.getItem('consoleToken') === token) localStorage.removeItem('consoleToken');
+    location.replace('/');
+    throw new Error('控制台登录已失效，请重新打开。');
   }
   return res.json();
 }
@@ -4409,14 +4392,18 @@ async function changeConsoleToken(generate) {
     msg.className = 'meta err';
     return;
   }
-  const r = await api('/api/console/token', 'POST', { token });
+  const current = prompt('更换主令牌前，请输入当前主令牌');
+  if (!current) return;
+  const result = await fetch('/api/console/token',{method:'POST',redirect:'error',headers:{
+    'content-type':'application/json','x-console-token':current.trim()
+  },body:JSON.stringify({token})});
+  const r = await result.json();
   if (!r.ok) {
     msg.textContent = '❌ ' + (r.error || '修改失败');
     msg.className = 'meta err';
     return;
   }
-  // 保存到 localStorage，当前页面继续使用新令牌
-  localStorage.setItem('consoleToken', r.token);
+  localStorage.setItem('consoleToken', r.browserCredential);
   input.value = r.token;
   msg.textContent = r.generated ? '已生成随机令牌，当前页面已自动使用。可点击显示后复制。' : '已保存新令牌';
   msg.className = 'meta ok';
@@ -4474,6 +4461,10 @@ document.querySelectorAll('[data-view]').forEach(button => button.addEventListen
 }));
 window.addEventListener('hashchange', () => {
   const page = location.hash.slice(1);
+  if (new URLSearchParams(page).has('launch')) {
+    location.reload();
+    return;
+  }
   if (Object.hasOwn(consolePages, page) || !page) setConsolePage(page, { updateHash: false });
 });
 document.querySelector('.skip-link').addEventListener('click', event => {

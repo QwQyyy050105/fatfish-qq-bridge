@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN"><meta charset="utf-8"><title>连接大肥鱼控制台</title>
+<main><h1>连接大肥鱼控制台</h1>
+<p id="status">正在检查本机登录状态…</p>
+<form hidden><label>控制台访问令牌 <input type="password" required autocomplete="off"></label>
+<button>打开控制台</button></form></main>
+<script>
+(() => {
+const form = document.querySelector('form');
+const status = document.getElementById('status');
+const storageKey = 'consoleToken';
+const launched = new URLSearchParams(location.hash.slice(1)).get('launch');
+const legacy = new URLSearchParams(location.search).get('token');
+history.replaceState(null,'',location.pathname);
+// Opening another launcher link in this tab can be a fragment-only navigation.
+// Reload to let one fresh login flow consume the ticket and clear the fragment.
+window.addEventListener('hashchange', () => {
+  if (new URLSearchParams(location.hash.slice(1)).has('launch')) location.reload();
+});
+function showLogin(message) {
+  status.textContent = message;
+  form.hidden = false;
+}
+async function openConsole(token) {
+  if (!token) return false;
+  const reply = await fetch('/',{headers:{'x-console-token':token},cache:'no-store',redirect:'error'});
+  if (reply.status === 401) return false;
+  if (!reply.ok || !(reply.headers.get('content-type') || '').includes('text/html')) throw Error();
+  const page = await reply.text();
+  localStorage.setItem(storageKey,token);
+  document.open();
+  document.write(page);
+  document.close();
+  return true;
+}
+async function redeem(ticket) {
+  const response = await fetch('/api/console/redeem-ticket',{method:'POST',redirect:'error',cache:'no-store',
+    headers:{'content-type':'application/json','x-console-launch':ticket},body:'{}'});
+  return response.ok ? (await response.json()).credential : '';
+}
+async function fromMaster(master) {
+  const response = await fetch('/api/console/launch-ticket',{method:'POST',redirect:'error',cache:'no-store',
+    headers:{'content-type':'application/json','x-console-token':master},body:'{}'});
+  if (!response.ok) return '';
+  return redeem((await response.json()).ticket);
+}
+async function start() {
+  if (launched && await openConsole(await redeem(launched))) return;
+  if (legacy && await openConsole(await fromMaster(legacy))) return;
+  const saved = localStorage.getItem(storageKey);
+  if (saved) {
+    if (/^fb1_[A-Za-z0-9_-]{43}$/.test(saved) && await openConsole(saved)) return;
+    if (await openConsole(await fromMaster(saved))) return;
+  }
+  if (saved) localStorage.removeItem(storageKey);
+  showLogin('请从本机启动器打开控制台，或输入当前令牌。');
+}
+form.addEventListener('submit', async event => {
+  event.preventDefault();
+  const input = form.querySelector('input');
+  const token = input.value.trim();
+  input.value = '';
+  try { if (!await openConsole(await fromMaster(token))) showLogin('令牌未通过，请核对后重试。'); }
+  catch { showLogin('控制台连接失败，请检查服务后重试。'); }
+});
+start().catch(() => showLogin('控制台连接失败，请检查服务和浏览器存储权限。'));
+})();
+</script></html>
