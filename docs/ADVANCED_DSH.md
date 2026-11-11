@@ -36,6 +36,8 @@ npm run start:advanced
 
 ## 支持范围
 
+收到 DSH 的 `turn/end` 中止事件时，普通对话在本机活动记录中显示“DSH 回合已中止”。桥接释放该回合，下一条正常完成的私聊回复仍可发送。连续中止不会在 QQ 逐条发送“已停止”。二代仿真的中止回合也会释放唤醒占用，并保留后续真实消息再次唤醒机器人的机会。若私聊持续没有回复，可结合活动记录和 `modelHealth` 检查 DSH 实际回合结果。
+
 适配器保留上游 DSH 0.1.x–0.2.x 的已知协议与离线 fixtures，但未对任意新版本做真实联调保证。版本契约由 `src/dsh-client.js`、setup presets 和对应离线测试描述。升级时先跑 `npm test`，再用自己的网关/模型做一次真实收发验收。
 
 仓库的可选 DSH 客户端依赖链将 `@deepseek-ai/dsh-client-connection` 锁定到 `0.1.2-rc.1`，避开 [GHSA-8m2g-8cgm-3vcp](https://github.com/advisories/GHSA-8m2g-8cgm-3vcp) 所述的旧版控制接口漏洞。离线协议回归和依赖安装通过，不代表与任何单独安装的 DSH 宿主已经完成真实联调；此锁定也不会升级那份宿主。请分别核对宿主版本，再验收高级模式的实际收发。

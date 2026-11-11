@@ -15,6 +15,7 @@
     "demo": "node src/main.mjs demo",
     "start:advanced": "node --env-file-if-exists=.env src/bridge.js",
     "test": "node scripts/test-offline.mjs",
+    "test:core": "node scripts/test-offline.mjs --core",
     "check:release": "node scripts/release_check.mjs",
     "setup:dsh": "node scripts/setup-dsh.mjs",
     "panel": "node --env-file-if-exists=.env src/main.mjs panel",

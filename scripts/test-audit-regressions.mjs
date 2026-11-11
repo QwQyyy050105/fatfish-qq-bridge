@@ -435,6 +435,75 @@ await test('R16 appendSocialV2Message 保留 kind/emojiId/summary/subType', asyn
   } finally { await h.close(); }
 });
 
+function* turnFrames(sessionId, turn, text, kind) {
+  for (const [type, data] of [
+    ['turn/start', { turn }],
+    ['assistant/message', { turn, message: { content: [{ type: 'text', text }] } }],
+    ['turn/end', { turn, reason: { kind } }],
+  ]) {
+    yield { payload: { type: 'session/event', sessionId, event: { type, data } } };
+  }
+}
+
+async function exerciseMux(h, scenario) {
+  const finished = Promise.withResolvers();
+  h.api.events.mux = async function* () {
+    try {
+      yield* scenario();
+      // Let the stream close and install its reconnect timer before harness teardown.
+      setImmediate(finished.resolve);
+    } catch (error) {
+      setImmediate(() => finished.reject(error));
+    }
+  };
+  const timer = setTimeout(() => finished.reject(new Error('Event sequence was not consumed')), 5000);
+  try {
+    void h.pumpMux().catch(finished.reject);
+    await finished.promise;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+await test('DSH aborts stay local and the next completed owner reply is sent once', async () => {
+  const h = await bridgeHarness({ config: { sendDelayMs: 0 } });
+  try {
+    h.setMode('chat');
+    const sid = await h.ensureSession('private:123');
+    await exerciseMux(h, function* () {
+      for (const turn of [1, 2, 3]) yield* turnFrames(sid, turn, 'incomplete', 'aborted');
+      yield* turnFrames(sid, 4, 'reply received', 'completed');
+      assert.deepEqual(h.calls.sent, [{ kind: 'private', id: 123, text: 'reply received' }]);
+      const activity = fs.readFileSync(path.join(h.temp, 'state', 'qq-activity.log'), 'utf8');
+      assert.equal(activity.match(/DSH 回合已中止/g)?.length, 3);
+    });
+  } finally { await h.close(); }
+});
+
+await test('an interrupted V2 wake releases the session without generating a reminder', async () => {
+  const h = await bridgeHarness({
+    config: { socialV2: { proactive: { enabled: false }, wake: { maxWakePerMinute: 2 } } },
+  });
+  try {
+    h.setMode('reserved2');
+    const key = 'group:456';
+    const st = h.getSocialV2State(key);
+    st.wakeConfig.noActionCount = 1;
+    await h.sendWakePromptV2(key, 'atMention');
+    assert.equal(h.calls.prompts.length, 1);
+    const sid = h.state.sessions[key];
+    await exerciseMux(h, async function* () {
+      yield* turnFrames(sid, 1, 'incomplete', 'aborted');
+      assert.equal(st.wakeConfig.noActionCount, 1);
+      assert.equal(h.isConversationBusyV2(key, st), false);
+      assert.equal(h.calls.prompts.length, 1);
+      assert.equal(h.calls.sent.length, 0);
+      await h.sendWakePromptV2(key, 'atMention');
+      assert.equal(h.calls.prompts.length, 2);
+    });
+  } finally { await h.close(); }
+});
+
 if (failures) {
   console.error(`\n${failures} 项失败`);
   process.exitCode = 1;

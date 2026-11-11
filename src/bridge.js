@@ -11409,11 +11409,12 @@ async function main() {
             // collector 生命周期见 trackTurnEvent()：只为 turn/start 建、空壳 turn/end 即清。
             const { ended } = trackTurnEvent(frame.sessionId, frame.event);
             if (ended) {
+              const interrupted = ended.reason.kind === 'aborted';
               // reserved2 无行动兜底：普通唤醒回合若既没发消息、也没 mark_read / set_wake_config，
               // 则累计 noActionCount；达到阈值后自动重置 WakeConfig，避免 AI 卡死。
               const silentQueueNow = social.silentTurns.get(frame.sessionId) ?? [];
               const isSilentTurn = silentQueueNow.length > 0;
-              if (currentMode === 'reserved2' && key && !isSilentTurn) {
+              if (currentMode === 'reserved2' && key && !isSilentTurn && !interrupted) {
                 const st = getSocialV2State(key);
                 const turnStart = v2TurnStartAt.get(frame.sessionId) ?? 0;
                 const sendToolHit = sendToolSucceededSessions.has(frame.sessionId);
@@ -11465,7 +11466,9 @@ async function main() {
               if (pendingWakeKeys.has(key)) {
                 pendingWakeKeys.delete(key);
                 disarmPendingWakeLease(key);
-                if (wakeConfigUpdatedKeys.has(key) || markReadCalledKeys.has(key)) {
+                // DSH can abort a turn during cancellation or replacement. Give a
+                // subsequent real wake priority over a reminder for that old turn.
+                if (interrupted || wakeConfigUpdatedKeys.has(key) || markReadCalledKeys.has(key)) {
                   ensureWakeableV2(getSocialV2State(key), { key });
                   wakeConfigUpdatedKeys.delete(key);
                   markReadCalledKeys.delete(key);
@@ -11644,9 +11647,9 @@ async function main() {
                     log(`社交模式：${key} 退场发言出错，回到观望`);
                   }
                 }
-              } else if (ended.reason.kind === 'aborted') {
+              } else if (interrupted) {
                 log(`⏹️ 回合被中止 (${key})`);
-                await sendToQQ(key, '⏹️ 已停止');
+                appendActivity(`${key} DSH 回合已中止`);
                 if (isFarewell) {
                   const st = socialState(key);
                   if (st.phase === 'exiting') {

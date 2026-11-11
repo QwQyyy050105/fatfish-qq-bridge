@@ -41,7 +41,13 @@ export function validateConfig(input = {}) {
   requireValue(Array.isArray(c.plugins) && c.plugins.length <= 30 && c.plugins.every(v => typeof v === 'string' && v.startsWith('./extensions/') && v.endsWith('.mjs') && !v.includes('..')), 'plugins must be owner-configured ./extensions/*.mjs');
   return c;
 }
-export function readConfig(root) { const file = path.join(root, 'template.config.json'); return validateConfig(fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}); }
+export function readConfig(root) {
+  const file = path.join(root, 'template.config.json');
+  if (!fs.existsSync(file)) return validateConfig();
+  // Windows PowerShell 5.1 and some editors write UTF-8 with a leading BOM.
+  const json = fs.readFileSync(file, 'utf8').replace(/^\uFEFF/, '');
+  return validateConfig(JSON.parse(json));
+}
 export function saveConfig(root, input) { const config = validateConfig(input); const file = path.join(root, 'template.config.json'); const temp = `${file}.${process.pid}.${randomUUID()}.tmp`; try { fs.writeFileSync(temp, JSON.stringify(config, null, 2) + '\n', { mode: 0o600, flag: 'wx' }); fs.renameSync(temp, file); return config; } finally { if (fs.existsSync(temp)) fs.unlinkSync(temp); } }
 export function panelToken(root) { const directory = path.join(root, 'state'); fs.mkdirSync(directory, { recursive: true }); const filename = path.join(directory, 'panel-token'); if (!fs.existsSync(filename)) { try { fs.writeFileSync(filename, randomBytes(32).toString('hex'), { mode: 0o600, flag: 'wx' }); } catch (e) { if (e.code !== 'EEXIST') throw e; } } return fs.readFileSync(filename, 'utf8').trim(); }
 export function configurationIssues(c, env = process.env) {

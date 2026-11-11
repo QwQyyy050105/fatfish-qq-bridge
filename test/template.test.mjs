@@ -24,6 +24,15 @@ test('strict validation rejects unknown fields, secret properties and untrusted 
   for (const value of [{ extra: true }, { model: { apiKey: 'do-not-store' } }, { panel: { host: '0.0.0.0' } }, { transport: { wsUrl: 'ws://public.example.com' } }, { model: { baseUrl: 'http://public.example.com' } }, { plugins: ['./extensions/../escape.mjs'] }, { allow: { groups: ['all'] } }]) assert.throws(() => validateConfig(value));
 });
 test('config roundtrip is atomic and portable', () => { const root = fs.mkdtempSync(path.join(os.tmpdir(), 'fatfish-config-')); try { saveConfig(root, { bot: { name: 'Demo' } }); assert.equal(readConfig(root).bot.name, 'Demo'); assert.equal(fs.readdirSync(root).length, 1); } finally { fs.rmSync(root, { recursive: true, force: true }); } });
+test('a UTF-8 BOM from Windows editors preserves validated settings', t => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), '迁移 demo-'));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const file = path.join(root, 'template.config.json');
+  fs.writeFileSync(file, '\uFEFF' + JSON.stringify({ bot: { name: '小鱼' } }));
+  assert.equal(readConfig(root).bot.name, '小鱼');
+  fs.writeFileSync(file, '\uFEFF' + JSON.stringify({ schemaVersion: 99 }));
+  assert.throws(() => readConfig(root), /schemaVersion/);
+});
 test('mock end to end demo sends exactly once and blocks unauthorized scope', async () => { const result = await runDemo(); assert.equal(result.authorizedReplies, 1); assert.equal(result.network, false); assert.equal(result.outsideScopeBlocked, true); });
 test('identity mismatch blocks all model calls and outgoing sends', async () => { let calls = 0; const transport = new MockTransport('999999999'); const runtime = new ChatRuntime(fixture(), { transport, model: { complete: async () => { calls++; return { text: 'oops' }; } } }); await assert.rejects(runtime.start()); assert.equal((await runtime.handle(event())).ignored, 'scope_or_identity'); assert.equal(calls, 0); assert.equal(transport.sent.length, 0); await runtime.close(); });
 test('unauthorized/self messages never reach the model; duplicate events only send once', async () => { let calls = 0; const transport = new MockTransport(); const runtime = new ChatRuntime(fixture(), { transport, model: { complete: async () => { calls++; return { text: 'ok' }; } } }); await runtime.start(); await runtime.handle(event('x', { group_id: '999999999' })); await runtime.handle(event('x', { user_id: '100000002' })); await runtime.handle(event()); await runtime.handle(event()); assert.equal(calls, 1); assert.equal(transport.sent.length, 1); await runtime.close(); });

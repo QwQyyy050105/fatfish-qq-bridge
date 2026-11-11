@@ -1,8 +1,10 @@
-# Fatfish QQ Bridge
+# Fatfish QQ Bridge · 蓝色大肥鱼
 
-一个可独立部署、可换人格和模型的 QQ 群聊伙伴模板。默认提供 **OneBot v11 + 兼容 API + 本机管理面板**，同时保留来自 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的 **DeepSeek Harness（DSH）高级仿真链路**。
+一个可以换人格、换模型的 QQ 聊天模板。**OneBot v11 网关负责 QQ 收发，模型 API 负责生成回复**，两者可在本机面板配置。需要工具或自主参与群聊的高级玩法时，可使用来自 [qq-bridge](https://github.com/Derpyu520/qq-bridge) 的 DeepSeek Harness（DSH）模式。
 
 它适合希望用普通 QQ 账号通过外部 OneBot 网关参与群聊，并且愿意自行选择、安装和维护网关的人。它**不使用官方 QQ Bot API**，也不连接微信。网关、QQ 版本和账号登录是独立依赖；本仓库不附带、安装或启动第三方 QQ 客户端或网关。三个模板的选择请先看 [区别与选择](docs/CHOOSING_A_TEMPLATE.md)。
+
+要改代码，先看[默认与 DSH 两条路线的代码入口](docs/CODE_MAP.md)，其中列有各环节对应的离线用例。
 
 ## 两种运行方式
 
@@ -31,20 +33,22 @@ npm test
 npm run doctor -- --json
 ```
 
-只需要 OneBot 消息桥、兼容 API 和本地面板时，可以把安装命令换为 `npm ci --omit=optional`，并先跳过完整 `npm test`。精简模式省略 DSH 高级路线、MCP 和配置 schema 工具依赖；能力差异与恢复方法见 [安装体积选择](docs/PORTABILITY.md#选择安装体积)。完整开发测试使用标准安装。
+只需要 OneBot 文本桥、本地面板和兼容模型 API 时，使用 `npm ci --omit=optional` 安装，再用 `npm run test:core` 验收。核心测试包含本机 HTTP 模型与 WebSocket 网关的合成收发。DSH 开发者请使用上面的完整安装与测试。[安装体积和换机步骤](docs/PORTABILITY.md)
 
-演示只使用合成账号、mock 模型和 mock 传输，不联网、不操作 QQ。测试包含本机回环 HTTP/WS 协议验收，不连接真实网关或云模型。`doctor` 只检查本地配置；空配置输出 `configuration_required`，不会把未验证的模型标成在线。
+演示成功时会输出 `authorizedReplies: 1`、`duplicateSuppressed: true`、`outsideScopeBlocked: true`，表示一条授权消息得到一次模拟回复，重复消息与授权范围外的消息都没有另发。`doctor` 只检查本地配置，首次运行看到 `configuration_required` 就可以继续填写面板。
 
 ## 连接自己的机器人
 
 1. 先自行安装并登录一个兼容 **OneBot v11 正向 WebSocket** 的外部网关，取得 WebSocket URL 和访问 token。本模板只消费协议，不保证任意 QQ/网关版本可用。
-2. 运行 `npm run init`，复制 `.env.example` 为 `.env`，在本机填写自己的模型 key 和网关 token。`.env`、配置、state 都被 Git 忽略。
+2. 运行 `npm run init`。首次部署且目录中尚无 `.env` 时，PowerShell 可执行 `Copy-Item .env.example .env`。在本机编辑这份文件，把模型密钥填入 `BOT_API_KEY`，网关访问令牌填入 `ONEBOT_ACCESS_TOKEN`。已有部署请编辑现有文件。`.env`、配置和 state 均被 Git 忽略。
 3. 运行 `npm run panel`，打开终端打印的本机面板链接，默认 `http://127.0.0.1:3100/`。链接 `#` 后是管理员令牌，只给自己保存。日常启动也可在 Windows 双击 `Start_Fatfish.cmd`。`npm run panel` 始终只配置，即使保存 enabled 也不连接 QQ；`npm start` 会在面板显示后后台尝试连接。
 4. 在面板填写 API Base URL（通常以 `/v1` 结尾）、准确模型 ID、确认的机器人 QQ 号，以及**授权群号 / 私聊 QQ 号**。默认无任何授权目标，也不开启网关连接。
 5. 保存设置，手动点击“实际模型连接测试”。它只发送独立测试提示词，不带聊天记录，可能产生 API 费用。
 6. 勾选“连接并允许自动回复”，保存；关闭仅配置面板，再运行 `npm start` 真正连接 QQ。确认状态中传输连接、账号验证均成功，再用另一个账号在授权群叫“小鲸鱼”。
 
 模板不会替换你选择的模型，也不会根据失败偷偷切换到便宜模型。API 模式默认使用 `max_tokens`；如提供商需要 `max_completion_tokens`，在面板选择对应字段。模型 ID、能力和费用由提供商决定。使用本地兼容服务时允许 `http://127.0.0.1:端口/v1`，无需 key；远端 API 只允许 HTTPS。
+
+首次实测可请另一账号在授权群发「小鲸鱼，17 加 26 等于多少」。面板 `received` 增加表示收到了可处理的授权来信，`sent` 增加表示网关接受了发送操作，另一账号在目标群看到对应回复才完成实际收发验收。若中间停住，可按面板字段逐步定位。[连接与收发排查](SUPPORT.md)
 
 ## 在面板上定制
 

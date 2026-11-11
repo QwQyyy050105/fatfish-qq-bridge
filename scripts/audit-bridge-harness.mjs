@@ -127,7 +127,7 @@ export async function bridgeHarness({ config = {}, savedState, files = {}, globa
     saveState, saveSocialV2State, readRoleState, writeRoleState,
     stateStorageFaults() { return Object.fromEntries(persistentStateFaults); },
     buildWakePromptV2, buildWakeSnapshotV2, sendWakePromptV2, socialV2,
-    refreshMode, modeAllowed, trackTurnEvent, replayPendingWakeReasonsV2,
+    refreshMode, modeAllowed, trackTurnEvent, replayPendingWakeReasonsV2, pumpMux,
     collectors, setupSleepTimerV2,
     getInitialPrompt, setInitialPrompt, loadInitialPrompts, formatInitialPromptV2,
     initialPrompts, initialPromptMaxChars,

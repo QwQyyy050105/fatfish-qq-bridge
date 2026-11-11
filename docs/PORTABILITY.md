@@ -4,15 +4,18 @@
 
 ## 选择安装体积
 
-标准安装 `npm ci` 包含全部 npm 可选组件。只需要OneBot 消息桥、兼容 API 和本地面板时，可在停止程序后选择精简安装：
+Windows PowerShell 若提示“无法加载 npm.ps1，因为在此系统上禁止运行脚本”，可以在同一目录使用 `npm.cmd`：例如 `npm.cmd ci --omit=optional`、`npm.cmd run demo -- --smoke`。它随 Windows 版 npm 提供，不需要为此修改全机执行策略。若系统连 `node --version` 或 `npm.cmd --version` 也找不到，先安装 README 要求的 Node 版本并重新打开终端。
+
+标准安装 `npm ci` 安装项目依赖和 npm 可选组件。只需要 OneBot 消息桥、兼容 API 和本地面板时，可在停止程序后选择精简安装。
 
 ```sh
 npm ci --omit=optional
+npm run test:core
 npm run demo -- --smoke
 npm run doctor -- --json
 ```
 
-这会省略DSH 高级路线、MCP 和配置 schema 工具依赖。精简模式支持 `npm start` 的普通 API 路线，不支持 `npm run start:advanced`、`npm run setup:dsh` 或 `npm run build:config`。使用这些命令前恢复完整依赖，并按 ADVANCED_DSH.md 准备 DSH 宿主和扩展包；npm 依赖安装成功本身不代表 DSH 已连接。
+这会省略 DSH 高级路线、MCP 和配置 schema 工具依赖。精简模式支持 `npm start` 的普通 API 路线。使用 `npm run start:advanced`、`npm run setup:dsh` 或 `npm run build:config` 前请恢复完整依赖，并按 [DSH 部署指南](ADVANCED_DSH.md) 准备宿主及扩展包。
 
 恢复完整组件时，先停止程序，再运行 `npm ci --include=optional`，然后重新启动。两种安装使用同一份锁文件，不改模型、人格卡或会话授权。`npm ci` 会重建依赖目录；请勿在机器人仍运行时切换。可选包安装失败不一定使 npm 整体退出失败，使用对应能力前仍需检查实际安装结果。
 
@@ -20,7 +23,7 @@ npm run doctor -- --json
 
 ## 扩展契约
 
-各仓库 docs/EXTENSIONS.md 和示例插件是可执行契约。插件使用 apiVersion、稳定 id、capabilities 和 setup；setup 参数及返回接口以各仓库实现为准。三个项目没有承诺插件二进制兼容。
+从[本仓库的扩展契约](EXTENSIONS.md)和[示例模型](../extensions/example-model.mjs)开始。三个模板都用 `apiVersion`、`id`、`capabilities` 和 `setup` 描述插件，但传入参数和返回值不同；跨模板迁移时需按目标仓库的示例适配。
 
 只加载部署者本机明确配置的模块。插件是受信任代码，具有宿主权限；本模板不提供代码沙箱。聊天和模型输出不能加载代码或扩大权限。
 
@@ -42,7 +45,7 @@ npm run doctor -- --json
 
 平台 ID 使用字符串，避免整数精度损失。昵称、群名和备注不是稳定 ID。消息发送者与引用消息原作者分别处理；转述某人说话不能替换当前发送者。
 
-新增群或联系人扩展部署配置，不改硬编码列表。默认没有真实会话授权。跨会话记忆、共享角色与收信范围分别配置。
+在默认 API 模式，用 `allow.groups` 和 `allow.private` 分别添加授权的群号与私聊 QQ 号；两份名单初始均为空。`context.sharedAcrossScopes` 只控制已授权会话间的上下文共享，默认关闭。[查看配置示例](../template.config.example.json)
 
 ## 模型与媒体
 
@@ -52,9 +55,34 @@ npm run doctor -- --json
 
 ## 配置与迁移
 
-示例只含虚构值与环境变量名。路径相对项目或明确的数据目录，不写开发者盘符。schemaVersion 迁移应验证旧值，未知配置版本应停止并说明；不要丢弃未知字段而声称成功。
+### 把默认 API 文本模式搬到另一台电脑
 
-导出角色和配置时区分可共享模板与本地账号数据。凭据、登录状态及聊天不随模板导出。删除数据时处理持久记录和在途任务，避免旧结果再次写回。
+1. 在新电脑取得与旧机相同版本的源码，安装 Node.js 22.13 或更高版本。进入新仓库运行上面的精简安装与演示。
+2. 运行 `npm run init`，用 `npm run panel` 打开仅配置面板。按下表迁移账号、人设与扩展。新安装会生成自己的管理链接。
+3. 新机先配置一个已获准测试的群或私聊。在网关上核对登录账号，核对端点的主机、端口和协议。新机的 `127.0.0.1` 指向新机自身。如果网关或本地模型也使用回环地址，请在新机准备相应服务，或按实际部署填写地址。
+4. 保存后可在新机做一次独立模型探测。切换收发前，先停止旧机桥接，再关闭新机的仅配置面板，运行 `npm start`。检查身份状态、网关回执，再用另一个账号验收一条真实回复。若需要切回，先停止新机，再启动旧机，可避免同一条群消息触发两个实例。
+
+| 项目 | 新机如何处理 |
+|---|---|
+| 名字、人设、别名、回复长度 | 旧面板查看，新面板填入。若只迁移角色，复制 `template.config.json` 的 `bot` 字段即可，其余字段沿用新机配置。 |
+| 参与方式与上下文长度 | 对照 `participation` 和 `context`。安静时段使用宿主本地时区。默认模式的聊天历史存于内存，重启后从新消息开始。 |
+| 网关、模型与授权目标 | 使用 `template.config.json` 的 `transport`、`model`、`allow`。同一所有者私下迁移完整配置时，先留在 `npm run panel` 配置模式，核对机器人 QQ 和新机应启用的会话。 |
+| 密钥与管理面板 | 按 `.env.example` 在新机私下配置网关和模型环境变量，重启后生效。使用新机打印的面板链接，令牌由本机 `state/panel-token` 生成；源码、公开 fork 和故障报告均无需附上该文件。 |
+| 自己开发的插件 | 把已审核的模块及所需源码放回相对位置 `extensions/`，按插件说明安装所需依赖，检查 `plugins` 中的相对路径后重启。[插件示例与契约](EXTENSIONS.md) |
+| 依赖与高级模式 | 用锁文件执行 `npm ci` 重建依赖。高级路线另用 `config.json`、`roles/`、DSH profile 和宿主；需要在新机按 [高级部署](ADVANCED_DSH.md) 配置和验收。 |
+
+### 从任意目录运行
+
+首次在仓库根目录打开 PowerShell 并保存项目路径，随后可切换到其他目录。引号支持文件夹名带空格或中文。
+
+```powershell
+$project = (Get-Location).Path
+Set-Location ..
+npm --prefix "$project" run demo -- --smoke
+npm --prefix "$project" run doctor -- --json
+```
+
+在快捷方式或任务计划程序中可用同样的 `--prefix` 参数，替换为实际仓库路径。这样 npm 会从项目根目录执行脚本并找到项目的 `.env`、配置和插件。默认面板从终端打印的本机链接打开。若同一机器运行多个实例，每个实例分别使用一个仓库目录、自己的 `template.config.json` 和不同的 `panel.port`，授权会话应符合各实例的用途。
 
 ## 验收与支持声明
 
