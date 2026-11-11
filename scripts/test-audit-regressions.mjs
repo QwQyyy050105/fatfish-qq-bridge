@@ -21,6 +21,9 @@
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
+import { once } from 'node:events';
+import { WebSocketServer } from 'ws';
+import { NodeApiClient } from '../src/dsh-client.js';
 import os from 'node:os';
 import path from 'node:path';
 import { bridgeHarness } from './audit-bridge-harness.mjs';
@@ -502,6 +505,159 @@ await test('an interrupted V2 wake releases the session without generating a rem
       assert.equal(h.calls.prompts.length, 2);
     });
   } finally { await h.close(); }
+});
+
+async function ownerRequest(h, id = 123, messageId = 10) {
+  await h.handleIncoming('private', id, { user_id: id, self_id: 999, message_id: messageId,
+    message: [{ type: 'text', data: { text: 'What is in the sample?' } }] }, h.cfg);
+  const prompt = h.calls.prompts.at(-1);
+  assert.ok(prompt?.requestId);
+  return prompt;
+}
+
+function ownerSnapshot({ sessionId, requestId }, extras = []) {
+  const turn = 9;
+  const entries = [
+    ['turn/start', { turn }],
+    ['user/message', { source: { kind: 'user', rpcId: requestId } }],
+    ...extras,
+    ['assistant/message', { turn, message: { content: [{ type: 'text', text: 'Recovered answer' }] } }],
+    ['turn/end', { turn, reason: { kind: 'completed' } }],
+  ];
+  return { payload: { type: 'session/snapshot', sessionId, snapshot: {
+    records: entries.map(([type, data], i) => ({ type: 'event', event: { type, data, seq: 100 + i } })),
+  } } };
+}
+
+async function testOwnerRecovery(name, run) {
+  await test(name, async () => {
+    const h = await bridgeHarness({ config: { sendDelayMs: 0, ackMessage: '', allow: { private: ['123', '124'], groups: ['456'] } } });
+    try {
+      h.setMode('chat');
+      await run(h);
+    } finally { await h.close(); }
+  });
+}
+
+await testOwnerRecovery('owner reply completed offline recovers once across a loopback DSH reconnect', async h => {
+  const prompt = await ownerRequest(h);
+  const records = ownerSnapshot(prompt).payload.snapshot.records;
+  const server = new WebSocketServer({ host: '127.0.0.1', port: 0 });
+  await once(server, 'listening');
+  const client = new NodeApiClient('http://127.0.0.1:' + server.address().port, undefined, {});
+  client.ensureAuth = async () => { client.cookie = 'fixture'; };
+  const controller = new AbortController();
+  const finished = Promise.withResolvers();
+  let connections = 0;
+  server.on('connection', socket => {
+    const n = ++connections;
+    socket.on('message', bytes => {
+      const frame = JSON.parse(bytes);
+      if (frame.endpoint !== 'session/follow') return;
+      if (frame.payload.args.request.address.sessionId !== prompt.sessionId) {
+        finished.reject(new Error('wrong session followed'));
+        return;
+      }
+      const item = value => socket.send(JSON.stringify({ type: 'item', streamId: frame.streamId, value }));
+      if (n === 1) {
+        item(records[0]); // disconnect after turn/start, before assistant/message
+        socket.close();
+        return;
+      }
+      item({ type: 'snapshot', records });
+      item({ type: 'snapshot', records });
+      for (const row of records) item(row); // buffered live replay after reconnect
+    });
+  });
+  client.events.follow(prompt.sessionId);
+  h.api.events.mux = async function* () {
+    for await (const envelope of client.events.mux({}, controller.signal)) {
+      yield envelope;
+      if (envelope.payload.event?.type === 'turn/end') finished.resolve();
+    }
+  };
+  const timer = setTimeout(() => finished.reject(new Error('missing reconnected reply')), 10000);
+  try {
+    void h.pumpMux().catch(finished.reject);
+    await finished.promise;
+    assert.equal(connections, 2);
+    assert.deepEqual(h.calls.sent, [{ kind: 'private', id: 123, text: 'Recovered answer' }]);
+    assert.equal(h.calls.prompts.length, 1);
+  } finally {
+    clearTimeout(timer);
+    controller.abort();
+    for (const socket of server.clients) socket.terminate();
+    await new Promise(resolve => server.close(resolve));
+  }
+});
+
+await testOwnerRecovery('live answer and a later reconnect snapshot never send twice', async h => {
+  const prompt = await ownerRequest(h);
+  await exerciseMux(h, function* () {
+    yield* turnFrames(prompt.sessionId, 9, 'Live answer', 'completed');
+    yield ownerSnapshot(prompt);
+    assert.deepEqual(h.calls.sent.map(r => r.text), ['Live answer']);
+  });
+});
+
+await testOwnerRecovery('any tool call or unacknowledged result excludes replay and model retries', async h => {
+  const p = await ownerRequest(h);
+  await exerciseMux(h, function* () {
+    for (const type of ['tool/call', 'tool/result', 'approval/asked', 'command/run', 'future/action']) {
+      yield ownerSnapshot(p, [[type, { turn: 9 }]]);
+    }
+    const snapshot = ownerSnapshot(p);
+    snapshot.payload.snapshot.records[2].event.data.message.content.push({ type: 'tool-call', name: 'example' });
+    yield snapshot;
+    assert.equal(h.calls.prompts.length, 1);
+    assert.equal(h.calls.sent.length, 0);
+  });
+});
+
+await testOwnerRecovery('stale owner RPC, non-owner session, and a mixed human prompt never recover', async h => {
+  const old = await ownerRequest(h);
+  const current = await ownerRequest(h, 123, 11);
+  const other = await ownerRequest(h, 124, 12);
+  await exerciseMux(h, function* () {
+    yield ownerSnapshot(old);
+    yield ownerSnapshot(other);
+    yield ownerSnapshot(current, [['user/message', { source: {kind:'user', rpcId:'other-client'} }]]);
+    yield ownerSnapshot(current, [['user/message', { source: {kind:'new-external-source'} }]]);
+    assert.equal(h.calls.sent.length, 0);
+    yield ownerSnapshot(current);
+    assert.equal(h.calls.sent.length, 1);
+  });
+});
+
+await testOwnerRecovery('partial, discontinuous, superseded and interrupted history stays silent', async h => {
+  const p = await ownerRequest(h);
+  await exerciseMux(h, function* () {
+    for (const kind of ['cut', 'hole', 'newer', 'aborted', 'interrupted', 'empty']) {
+      const snapshot = ownerSnapshot(p);
+      const rows = snapshot.payload.snapshot.records;
+      if (kind === 'cut') rows.shift();
+      if (kind === 'hole') rows[1].event.seq += 1;
+      if (kind === 'newer') rows.push({ type:'event', event:{type:'turn/start', seq:104, data:{turn:10}} });
+      if (kind === 'aborted') rows.at(-1).event.data.reason.kind = 'aborted';
+      if (kind === 'interrupted') rows[2].event.data.interrupted = true;
+      if (kind === 'empty') rows[2].event.data.message.content = [{type:'reasoning',text:'private reasoning'}];
+      yield snapshot;
+    }
+    assert.equal(h.calls.sent.length, 0);
+    assert.equal(h.calls.prompts.length, 1);
+  });
+});
+
+await testOwnerRecovery('current session and authorization are checked again on snapshot recovery', async h => {
+  const p = await ownerRequest(h);
+  await exerciseMux(h, function* () {
+    h.cfg.ownerQQ = 124;
+    yield ownerSnapshot(p);
+    assert.equal(h.calls.sent.length, 0);
+    h.cfg.ownerQQ = 123;
+    yield ownerSnapshot(p);
+    assert.equal(h.calls.sent.length, 0);
+  });
 });
 
 if (failures) {

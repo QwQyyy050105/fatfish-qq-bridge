@@ -2408,6 +2408,10 @@ async function main() {
     }
   }
   const collectors = new Map(); // sessionId -> turn collector
+  // Only the latest direct owner request can recover a reply after a follow gap.
+  // Keep routing evidence in memory, without duplicating prompts, images or replies.
+  let ownerReplyReceipt = null;
+  let recoveredOwnerTurn = null;
   const sendToolSucceededSessions = new Set(); // sessionId：当前 turn 内 MCP 发送类工具至少成功一次
   const v2TurnStartAt = new Map(); // sessionId -> timestamp：reserved2 turn 开始时间，用于判断是否“无行动”
   const toolCallNames = new Map(); // sessionId -> Map<callId, toolName>：用于结果日志关联工具名
@@ -11023,12 +11027,20 @@ async function main() {
     }
     if (!isCurrentSession(key, sessionId)) throw new Error('投递前会话已重置或权限已变化');
     assertPersistentStateReady();
+    const requestId = crypto.randomUUID();
+    const ownerRequest = key === 'private:' + cfg.ownerQQ && ['chat', 'closed-agent'].includes(currentMode);
+    if (ownerRequest) {
+      ownerReplyReceipt = { key, sessionId, requestId, policy: sessionPolicy(key),
+        expiresAt: Date.now() + TURN_BUSY_LEASE_MS, lastEndedTurn: -1 };
+    }
     const accepted = await api.sessions.prompt({
+      requestId,
       sessionId,
       mode: 'queue',
       content
     });
     if (!accepted.result.ok) {
+      if (ownerReplyReceipt?.requestId === requestId) ownerReplyReceipt = null;
       const errText = `${accepted.result.error.code}: ${accepted.result.error.message}`;
       const safeErrText = shouldAuditKey(key) && SENSITIVE_RE.test(errText) ? '（含敏感信息，已隐藏）' : errText;
       await sendToQQ(key, `⚠️ 消息未被接受：${safeErrText}`);
@@ -11236,6 +11248,61 @@ async function main() {
     return { collector, ended };
   }
 
+  // A completed snapshot normally belongs to history. Reconstruct it only when
+  // DSH's own user-rpc record ties the entire newest turn to our live QQ request.
+  function recoverOwnerReply(sessionId, records) {
+    const receipt = ownerReplyReceipt;
+    if (!receipt || receipt.sessionId !== sessionId || !Array.isArray(records)) return null;
+    const { key } = receipt;
+    if (Date.now() > receipt.expiresAt || key !== 'private:' + cfg.ownerQQ ||
+        !isCurrentSession(key, sessionId) || receipt.policy !== sessionPolicy(key)) {
+      ownerReplyReceipt = null;
+      return null;
+    }
+    const events = records.map(entry => entry?.type === 'event' ? entry.event : entry);
+    const start = events.findLastIndex(event => event?.type === 'turn/start');
+    if (start < 0) return null;
+    const turn = events[start].data?.turn;
+    if (!Number.isSafeInteger(turn) || turn <= receipt.lastEndedTurn) return null;
+    const end = events.findIndex((event, i) => i > start && event?.type === 'turn/end');
+    if (end < 0) return null;
+
+    const span = events.slice(start, end + 1);
+    const final = span.at(-1);
+    if (final.data?.turn !== turn || final.data?.reason?.kind !== 'completed') return null;
+    const inputs = span.filter(event => event?.type === 'user/message').map(event => event.data?.source);
+    const users = inputs.filter(source => source?.kind === 'user');
+    if (users.length !== 1 || users[0].rpcId !== receipt.requestId ||
+        inputs.some(source => !['user', 'runtime-context'].includes(source?.kind))) return null;
+    const collector = createTurnCollector();
+    // Known, passive records in a text-only DSH turn. Future protocol actions
+    // need explicit review before their interrupted delivery can be recovered.
+    const passive = new Set(['turn/start','turn/end','step/start','step/end',
+      'agent/inbox/spliced','system/message','user/message','request/header',
+      'request/context','session/title','session/title-llm-request','assistant/message']);
+    let hasText = false;
+    for (const [i, event] of span.entries()) {
+      if (!Number.isSafeInteger(event?.seq) || event.seq !== span[0].seq + i) return null;
+      // A tool (including a failed or unacknowledged send) may have produced an
+      // external effect. Never replay its text, issue a prompt or call a tool.
+      if (!passive.has(event.type) || event.data?.turn != null && event.data.turn !== turn) return null;
+      if (event.type === 'turn/start') collector.push(event);
+      if (event.type !== 'assistant/message') continue;
+      const blocks = event.data?.message?.content;
+      if (event.data.turn !== turn || event.data.interrupted || !Array.isArray(blocks) ||
+          blocks.some(block => !['text', 'reasoning'].includes(block?.type))) return null;
+      hasText ||= blocks.some(block => block.type === 'text' && typeof block.text === 'string' && block.text.trim());
+      collector.push(event);
+    }
+    if (!hasText) return null;
+    // Consume before attempting delivery; an unknown QQ send must never replay.
+    ownerReplyReceipt = null;
+    recoveredOwnerTurn = { sessionId, turn };
+    collectors.set(sessionId, collector);
+    log('DSH 恢复了断线期间已完成的主人私聊回复');
+    return { type: 'session/event', sessionId, event: final };
+  }
+
   async function pumpMux() {
     // 事件流重连退避：DSH 侧流被立刻关闭时（例如版本不兼容，见 issue #34），
     // 固定 3 秒重连会以每分钟 20 行的速度刷屏，真正有用的错误反而被淹没。
@@ -11247,12 +11314,12 @@ async function main() {
         log('连接 DSH 事件流…');
         for await (const envelope of api.events.mux({})) {
           framesThisStream += 1;
-          const frame = envelope.payload;
-          // 会话开场快照：只喂 token 账本。它含**历史** turn/end，绝不能让它们走
-          // session/event 通道 —— 否则桥接会把早已结束的回合当成新回合去发 QQ 回复。
+          let frame = envelope.payload;
+          // History is for accounting unless an exact pending owner receipt permits recovery.
           if (frame.type === 'session/snapshot') {
             recordSessionSnapshot(frame.sessionId, frame.snapshot);
-            continue;
+            frame = recoverOwnerReply(frame.sessionId, frame.snapshot?.records);
+            if (!frame) continue;
           }
           if (frame.type === 'session/event') {
             // Token 记账放在最前面：无论会话是否仍属当前模式/是否学习会话，
@@ -11293,6 +11360,12 @@ async function main() {
             }
             // 追踪当前 turn 是否成功调用过 MCP 发送类工具：
             if (!isCurrentSession(key, frame.sessionId)) continue;
+            if (envelope.payload.type !== 'session/snapshot' && recoveredOwnerTurn?.sessionId === frame.sessionId &&
+                Number.isSafeInteger(frame.event.data?.turn) && frame.event.data.turn <= recoveredOwnerTurn.turn) continue;
+            if (frame.event.type === 'turn/end' && ownerReplyReceipt?.sessionId === frame.sessionId &&
+                Number.isSafeInteger(frame.event.data?.turn)) {
+              ownerReplyReceipt.lastEndedTurn = Math.max(ownerReplyReceipt.lastEndedTurn, frame.event.data.turn);
+            }
             // 只有“发送成功”才跳过自动转发；如果工具调用失败，仍允许 AI 的文本正常发出。
             if (frame.event.type === 'turn/start') {
               sendToolSucceededSessions.delete(frame.sessionId);
